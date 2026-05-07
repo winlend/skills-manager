@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-05-07
+
+### Added
+- Agent-friendly CLI (`skills-manager-cli`) to operate on the skills repo without opening the desktop app — list, inspect, and export skills; preview and apply scenarios; run git backup commands. Supports `--json` for scripting and `--skills-root` to point at any cloned skills checkout. Install with `npm run cli:install`.
+
+### Fixed
+- Git Backup: cloning a remote skills repository on Windows no longer fails — the repo lock has been moved outside the skills directory so the clone target can be empty when needed.
+- CLI: `--skills-root` no longer writes `skills-manager.db` and other manager state into the parent directory of the cloned skills repo. Per-checkout state now lives under `~/.skills-manager/external/`, namespaced by the canonical path of the skills root.
+
 ## [1.16.1] - 2026-05-01
 
 ### Changed

@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.17.0] - 2026-05-07
+
+### 新增
+- 新增面向 agent 的命令行工具 `skills-manager-cli`，无需打开桌面应用即可操作 skills 仓库 —— 列出/查看/导出技能、预览/应用 scenario、执行 git 备份命令。支持 `--json` 输出和 `--skills-root` 直接指向任意已克隆的 skills 目录。可通过 `npm run cli:install` 安装到 PATH。
+
+### 修复
+- Git 备份：Windows 下克隆远端 skills 仓库不再因仓库锁阻塞而失败 —— 锁文件已移到 skills 目录之外，克隆目标可以保持空目录。
+- CLI：`--skills-root` 不再把 `skills-manager.db` 等管理状态写到 skills 目录的父级，每个外部目录的状态现在统一放在 `~/.skills-manager/external/` 下，按 skills 根目录的规范化路径分目录隔离。
+
 ## [1.16.1] - 2026-05-01
 
 ### 变更
