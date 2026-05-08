@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   CheckCircle2,
+  ChevronRight,
   Globe,
   Layers,
   LayoutGrid,
@@ -201,11 +202,15 @@ export function GlobalWorkspace() {
 
   const installedTools = useMemo(() => tools.filter((t) => t.installed && t.enabled), [tools]);
 
-  useEffect(() => {
-    if (!agentKey && installedTools.length > 0) {
-      navigate(`/global-workspace/${installedTools[0].key}`, { replace: true });
+  const skillCountByAgent = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const tool of installedTools) {
+      map[tool.key] = managedSkills.filter((s) =>
+        s.targets.some((target) => target.tool === tool.key)
+      ).length;
     }
-  }, [agentKey, installedTools, navigate]);
+    return map;
+  }, [installedTools, managedSkills]);
 
   const currentTool = useMemo(
     () => (agentKey ? tools.find((t) => t.key === agentKey) ?? null : null),
@@ -371,7 +376,66 @@ export function GlobalWorkspace() {
     );
   }
 
-  if (!currentTool) return null;
+  if (!currentTool) {
+    return (
+      <div className="app-page">
+        <div className="app-page-header pr-2 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="app-page-title flex items-center gap-2.5">
+              <Globe className="h-5 w-5 text-accent" />
+              {t("globalWorkspace.title")}
+            </h1>
+            <p className="app-page-subtitle">{t("globalWorkspace.subtitle")}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 pt-1">
+            <button
+              onClick={() => setShowPresetDialog(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-background px-3 py-2 text-[13px] font-medium text-secondary transition-colors hover:border-border hover:bg-surface-hover"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              {t("presetActions.button")}
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {installedTools.map((tool) => {
+            const count = skillCountByAgent[tool.key] ?? 0;
+            return (
+              <button
+                key={tool.key}
+                onClick={() => navigate(`/global-workspace/${tool.key}`)}
+                className="app-panel group flex items-center gap-3 p-3.5 text-left transition-all hover:border-border hover:bg-surface-hover"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-muted group-hover:text-secondary">
+                  <Globe className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13px] font-semibold text-secondary">{tool.display_name}</p>
+                  <p className="text-[12px] text-muted">{t("globalWorkspace.skillCount", { count })}</p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-faint transition-transform group-hover:translate-x-0.5" />
+              </button>
+            );
+          })}
+        </div>
+
+        <PresetWorkspaceActionDialog
+          open={showPresetDialog}
+          title={t("presetActions.applyToGlobal")}
+          presets={scenarios}
+          managedSkills={managedSkills}
+          agents={globalWorkspaceAgents}
+          initialSelectedAgents={installedTools.map((t) => t.key)}
+          onClose={() => setShowPresetDialog(false)}
+          existsInWorkspace={existsInGlobal}
+          onAddSkill={handlePresetAdd}
+          onRemoveSkill={handlePresetRemove}
+          onComplete={handlePresetComplete}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="app-page">
