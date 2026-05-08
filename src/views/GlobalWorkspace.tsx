@@ -328,17 +328,13 @@ export function GlobalWorkspace() {
 
   const globalWorkspaceAgents = useMemo(
     () =>
-      currentTool
-        ? [
-            {
-              key: currentTool.key,
-              display_name: currentTool.display_name,
-              enabled: currentTool.enabled,
-              installed: currentTool.installed,
-            },
-          ]
-        : [],
-    [currentTool]
+      installedTools.map((t) => ({
+        key: t.key,
+        display_name: t.display_name,
+        enabled: t.enabled,
+        installed: t.installed,
+      })),
+    [installedTools]
   );
 
   const existsInGlobal = useCallback(
