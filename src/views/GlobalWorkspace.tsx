@@ -443,101 +443,103 @@ export function GlobalWorkspace() {
         </div>
       </div>
 
-      {/* Toolbar */}
-      <div className="app-toolbar">
-        <div className="flex flex-1 gap-3">
-          <div className="relative w-full max-w-[280px]">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("globalWorkspace.addSkillSearch")}
-              className="app-input w-full pl-9 font-medium"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
+      <div className="-mb-3 flex flex-col gap-2">
+        {/* Toolbar */}
+        <div className="app-toolbar">
+          <div className="flex flex-1 gap-3">
+            <div className="relative w-full max-w-[280px]">
+              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("globalWorkspace.addSkillSearch")}
+                className="app-input w-full pl-9 font-medium"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+
+          <div className="app-segmented">
+            <button
+              onClick={() => setViewMode("grid")}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                viewMode === "grid" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setViewMode("list")}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                viewMode === "list" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+            >
+              <List className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => (isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true))}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+              title={isMultiSelect ? t("globalWorkspace.cancelSelect") : t("globalWorkspace.selectMode")}
+            >
+              <SquareCheck className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        <div className="app-segmented">
-          <button
-            onClick={() => setViewMode("grid")}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              viewMode === "grid" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-          >
-            <LayoutGrid className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setViewMode("list")}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              viewMode === "list" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-          >
-            <List className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => (isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true))}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-            title={isMultiSelect ? t("globalWorkspace.cancelSelect") : t("globalWorkspace.selectMode")}
-          >
-            <SquareCheck className="h-4 w-4" />
-          </button>
-        </div>
+        {/* Tag filters */}
+        {allTags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1 px-1">
+            <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
+            <button
+              onClick={() => setTagFilters(new Set())}
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                tagFilters.size === 0
+                  ? "bg-accent text-white"
+                  : "bg-surface-hover text-muted hover:text-secondary"
+              )}
+            >
+              {t("mySkills.tags.allTags")}
+            </button>
+            {allTags.map((tag) => {
+              const active = tagFilters.has(tag);
+              return (
+                <button
+                  key={tag}
+                  onClick={() => toggleTagFilter(tag)}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    active ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
+                  )}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Preset bar */}
+        {scenarios.length > 0 && (
+          <PresetBar
+            presets={scenarios}
+            managedSkills={managedSkills}
+            agentKeys={presetBarAgentKeys}
+            existsInWorkspace={existsInGlobal}
+            onAddSkill={handlePresetAdd}
+            onRemoveSkill={handlePresetRemove}
+            onComplete={handlePresetComplete}
+          />
+        )}
       </div>
-
-      {/* Tag filters */}
-      {allTags.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap items-center gap-1 px-1 -mt-2">
-          <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
-          <button
-            onClick={() => setTagFilters(new Set())}
-            className={cn(
-              "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-              tagFilters.size === 0
-                ? "bg-accent text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            {t("mySkills.tags.allTags")}
-          </button>
-          {allTags.map((tag) => {
-            const active = tagFilters.has(tag);
-            return (
-              <button
-                key={tag}
-                onClick={() => toggleTagFilter(tag)}
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-                  active ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
-                )}
-              >
-                {tag}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Preset bar */}
-      {scenarios.length > 0 && (
-        <PresetBar
-          presets={scenarios}
-          managedSkills={managedSkills}
-          agentKeys={presetBarAgentKeys}
-          existsInWorkspace={existsInGlobal}
-          onAddSkill={handlePresetAdd}
-          onRemoveSkill={handlePresetRemove}
-          onComplete={handlePresetComplete}
-        />
-      )}
 
       {/* Multi-select toolbar */}
       {isMultiSelect && (

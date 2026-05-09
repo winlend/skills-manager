@@ -840,127 +840,129 @@ export function ProjectDetail() {
         </div>
       </div>
 
-      <div className="app-toolbar">
-        <div className="flex flex-1 gap-3">
-          <div className="relative w-full max-w-[280px]">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("project.searchPlaceholder")}
-              className="app-input w-full pl-9 font-medium"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
+      <div className="-mb-3 flex flex-col gap-2">
+        <div className="app-toolbar">
+          <div className="flex flex-1 gap-3">
+            <div className="relative w-full max-w-[280px]">
+              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("project.searchPlaceholder")}
+                className="app-input w-full pl-9 font-medium"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+            <div className="app-segmented">
+              {(["all", "enabled", "disabled"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setFilterMode(mode)}
+                  className={cn(
+                    "app-segmented-button",
+                    filterMode === mode && "app-segmented-button-active"
+                  )}
+                >
+                  {t(`project.filters.${mode}`)}
+                </button>
+              ))}
+            </div>
           </div>
+
           <div className="app-segmented">
-            {(["all", "enabled", "disabled"] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setFilterMode(mode)}
-                className={cn(
-                  "app-segmented-button",
-                  filterMode === mode && "app-segmented-button-active"
-                )}
-              >
-                {t(`project.filters.${mode}`)}
-              </button>
-            ))}
+            <button
+              onClick={loadSkills}
+              className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
+              title={t("common.refresh")}
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            </button>
+            <button
+              onClick={() => setViewMode("grid")}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                viewMode === "grid" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setViewMode("list")}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                viewMode === "list" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+            >
+              <List className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
+              className={cn(
+                "rounded-md p-2 transition-colors outline-none",
+                isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
+              )}
+              title={isMultiSelect ? t("project.cancelSelect") : t("project.selectMode")}
+            >
+              <SquareCheck className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        <div className="app-segmented">
-          <button
-            onClick={loadSkills}
-            className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary"
-            title={t("common.refresh")}
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-          </button>
-          <button
-            onClick={() => setViewMode("grid")}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              viewMode === "grid" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-          >
-            <LayoutGrid className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setViewMode("list")}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              viewMode === "list" ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-          >
-            <List className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => isMultiSelect ? exitMultiSelect() : setIsMultiSelect(true)}
-            className={cn(
-              "rounded-md p-2 transition-colors outline-none",
-              isMultiSelect ? "bg-surface-active text-secondary" : "text-muted hover:text-tertiary"
-            )}
-            title={isMultiSelect ? t("project.cancelSelect") : t("project.selectMode")}
-          >
-            <SquareCheck className="h-4 w-4" />
-          </button>
-        </div>
+        {allTags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1 px-1">
+            <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
+            <button
+              onClick={() => setTagFilters(new Set())}
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                tagFilters.size === 0
+                  ? "bg-accent text-white dark:bg-accent dark:text-white"
+                  : "bg-surface-hover text-muted hover:text-secondary"
+              )}
+            >
+              {t("mySkills.tags.allTags")}
+            </button>
+            {allTags.map((tag) => {
+              const active = tagFilters.has(tag);
+              return (
+                <button
+                  key={tag}
+                  onClick={() => {
+                    setTagFilters((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(tag)) next.delete(tag);
+                      else next.add(tag);
+                      return next;
+                    });
+                  }}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+                    active ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
+                  )}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Preset bar */}
+        {scenarios.length > 0 && selectedExportAgents.length > 0 && (
+          <PresetBar
+            presets={scenarios}
+            managedSkills={managedSkills}
+            agentKeys={selectedExportAgents}
+            existsInWorkspace={presetSkillExistsInProject}
+            onAddSkill={handleAddPresetSkillToProject}
+            onRemoveSkill={handleRemovePresetSkillFromProject}
+            onComplete={handlePresetActionComplete}
+          />
+        )}
       </div>
-
-      {allTags.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap items-center gap-1 px-1">
-          <span className="text-[12px] text-muted">{t("mySkills.tags.filter")}</span>
-          <button
-            onClick={() => setTagFilters(new Set())}
-            className={cn(
-              "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-              tagFilters.size === 0
-                ? "bg-accent text-white dark:bg-accent dark:text-white"
-                : "bg-surface-hover text-muted hover:text-secondary"
-            )}
-          >
-            {t("mySkills.tags.allTags")}
-          </button>
-          {allTags.map((tag) => {
-            const active = tagFilters.has(tag);
-            return (
-              <button
-                key={tag}
-                onClick={() => {
-                  setTagFilters((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(tag)) next.delete(tag);
-                    else next.add(tag);
-                    return next;
-                  });
-                }}
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
-                  active ? getTagActiveColor(tag, allTags) : getTagColor(tag, allTags)
-                )}
-              >
-                {tag}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Preset bar */}
-      {scenarios.length > 0 && selectedExportAgents.length > 0 && (
-        <PresetBar
-          presets={scenarios}
-          managedSkills={managedSkills}
-          agentKeys={selectedExportAgents}
-          existsInWorkspace={presetSkillExistsInProject}
-          onAddSkill={handleAddPresetSkillToProject}
-          onRemoveSkill={handleRemovePresetSkillFromProject}
-          onComplete={handlePresetActionComplete}
-        />
-      )}
 
       {isMultiSelect && (
         <MultiSelectToolbar

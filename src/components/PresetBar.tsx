@@ -89,7 +89,7 @@ export function PresetBar({
   const busy = loadingKey !== null;
 
   return (
-    <div className="mb-1.5 flex items-center gap-1 px-1">
+    <div className="flex items-center gap-1 px-1">
       <span className="shrink-0 text-[12px] text-muted">Preset</span>
       <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5">
         {visiblePresets.map((preset) => {
@@ -109,7 +109,7 @@ export function PresetBar({
               disabled={busy}
               title={preset.name}
               className={cn(
-                "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] font-medium transition-colors disabled:opacity-50",
+                "inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] font-medium transition-colors disabled:opacity-50",
                 s.status === "active"
                   ? `${scenarioIcon.activeClass} ${scenarioIcon.colorClass}`
                   : s.status === "partial"
