@@ -89,7 +89,7 @@ export function PresetBar({
   const busy = loadingKey !== null;
 
   return (
-    <div className="mb-3 -mt-2 flex items-center gap-2">
+    <div className="mb-2 -mt-1 flex items-center gap-1 px-1">
       <span className="shrink-0 text-[12px] text-muted">Preset</span>
       <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5">
         {visiblePresets.map((preset) => {
