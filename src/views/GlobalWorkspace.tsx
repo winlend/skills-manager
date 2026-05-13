@@ -439,13 +439,17 @@ export function GlobalWorkspace() {
   useEffect(() => {
     if (!currentToolKey) {
       loadedAgentKeyRef.current = null;
-      localSkillsRequestRef.current += 1; // discard any in-flight load for the previous agent
       setLocalSkills([]);
       return;
     }
     if (loadedAgentKeyRef.current === currentToolKey) return;
     loadedAgentKeyRef.current = currentToolKey;
     void loadLocalSkills();
+    // On unmount or agent switch, invalidate this in-flight load so its result
+    // (or error toast) can't land on the next page / an unmounted component.
+    return () => {
+      localSkillsRequestRef.current += 1;
+    };
   }, [currentToolKey, loadLocalSkills]);
 
   useEffect(() => {
