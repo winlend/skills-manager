@@ -351,6 +351,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -440,6 +441,7 @@ pub fn run() {
             commands::settings::set_central_repo_path,
             commands::settings::open_central_repo_folder,
             commands::settings::check_app_update,
+            commands::settings::get_diagnostic_info,
             commands::settings::app_exit,
             commands::settings::hide_to_tray,
             // Git Backup

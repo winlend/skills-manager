@@ -405,6 +405,18 @@ export interface AppUpdateInfo {
 export const checkAppUpdate = () =>
   invoke<AppUpdateInfo>("check_app_update");
 
+export interface DiagnosticInfo {
+  app_version: string;
+  os: string;
+  os_version: string;
+  arch: string;
+  central_repo_path: string;
+  central_repo_path_overridden: boolean;
+}
+
+export const getDiagnosticInfo = () =>
+  invoke<DiagnosticInfo>("get_diagnostic_info");
+
 // ── Git Backup ──
 
 export type GitUpstreamHealth =

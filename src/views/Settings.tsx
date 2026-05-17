@@ -16,6 +16,7 @@ import {
   Moon,
   Monitor,
   BookOpen,
+  Bug,
   Download,
   Type,
   Key,
@@ -47,6 +48,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { check as checkUpdater } from "@tauri-apps/plugin-updater";
 import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { cn } from "../utils";
@@ -168,6 +170,7 @@ export function Settings() {
   const [refreshing, setRefreshing] = useState(false);
   const [openingRepo, setOpeningRepo] = useState(false);
   const [openingGithub, setOpeningGithub] = useState(false);
+  const [reportingIssue, setReportingIssue] = useState(false);
   const [centralRepoPath, setCentralRepoPath] = useState("");
   const [centralRepoPathOverride, setCentralRepoPathOverride] = useState<string | null>(null);
   const [editingCentralRepoPath, setEditingCentralRepoPath] = useState(false);
@@ -471,6 +474,48 @@ export function Settings() {
       toast.error(t("common.error"));
     } finally {
       setOpeningGithub(false);
+    }
+  };
+
+  const handleReportIssue = async () => {
+    setReportingIssue(true);
+    try {
+      const info = await api.getDiagnosticInfo();
+      const md = [
+        "**Diagnostics** (auto-collected by Skills Manager)",
+        "",
+        `- App version: \`${info.app_version}\``,
+        `- OS: \`${info.os} ${info.os_version} (${info.arch})\``,
+        `- Central repo: \`${info.central_repo_path}\`${info.central_repo_path_overridden ? " (custom path)" : ""}`,
+      ].join("\n");
+      let copied = false;
+      try {
+        await clipboardWriteText(md);
+        copied = true;
+      } catch (err) {
+        console.error("Clipboard write failed", err);
+        try {
+          await navigator.clipboard.writeText(md);
+          copied = true;
+        } catch (err2) {
+          console.error("Browser clipboard fallback also failed", err2);
+        }
+      }
+      try {
+        await openUrl(`${GITHUB_URL}/issues/new?template=bug_report.md`);
+      } catch (err) {
+        console.error("Failed to open issue page", err);
+      }
+      if (copied) {
+        toast.success(t("settings.diagnosticsCopied"));
+      } else {
+        toast.message(t("settings.diagnosticsCopyManual"), { description: md });
+      }
+    } catch (error) {
+      console.error("Failed to prepare diagnostics", error);
+      toast.error(t("common.error"));
+    } finally {
+      setReportingIssue(false);
     }
   };
 
@@ -1488,6 +1533,20 @@ export function Settings() {
                 className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
               >
                 <BookOpen className="w-3 h-3" /> {t("settings.help")}
+              </button>
+              <button
+                type="button"
+                onClick={handleReportIssue}
+                disabled={reportingIssue}
+                title={t("settings.reportIssueHint")}
+                className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
+              >
+                {reportingIssue ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Bug className="w-3 h-3" />
+                )}
+                {t("settings.reportIssue")}
               </button>
               <button
                 type="button"

@@ -156,6 +156,93 @@ pub async fn check_app_update(
     .await?
 }
 
+#[derive(serde::Serialize)]
+pub struct DiagnosticInfo {
+    pub app_version: String,
+    pub os: String,
+    pub os_version: String,
+    pub arch: String,
+    pub central_repo_path: String,
+    pub central_repo_path_overridden: bool,
+}
+
+#[tauri::command]
+pub async fn get_diagnostic_info(app: tauri::AppHandle) -> Result<DiagnosticInfo, AppError> {
+    let app_version = app.config().version.clone().unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let os = std::env::consts::OS.to_string();
+        let arch = std::env::consts::ARCH.to_string();
+        let os_version = detect_os_version();
+        let configured = central_repo::configured_base_dir();
+        let central_repo_path = central_repo::base_dir().to_string_lossy().to_string();
+        Ok(DiagnosticInfo {
+            app_version,
+            os,
+            os_version,
+            arch,
+            central_repo_path,
+            central_repo_path_overridden: configured.is_some(),
+        })
+    })
+    .await?
+}
+
+fn detect_os_version() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|out| {
+                if out.status.success() {
+                    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("cmd");
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.args(["/C", "ver"])
+            .output()
+            .ok()
+            .and_then(|out| {
+                if out.status.success() {
+                    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|content| {
+                for line in content.lines() {
+                    if let Some(rest) = line.strip_prefix("PRETTY_NAME=") {
+                        return Some(rest.trim().trim_matches('"').to_string());
+                    }
+                }
+                None
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        "unknown".to_string()
+    }
+}
+
 #[tauri::command]
 pub async fn app_exit(app: tauri::AppHandle) {
     let app_for_main = app.clone();
