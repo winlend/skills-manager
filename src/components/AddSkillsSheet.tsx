@@ -3,13 +3,12 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleSlash,
   Loader2,
   Search,
-  Square,
-  SquareCheck,
   X,
 } from "lucide-react";
 import { cn } from "../utils";
@@ -31,6 +30,7 @@ import { AgentIcon } from "./AgentIcon";
 import { SkillPickerRow } from "./SkillPickerRow";
 
 const SOURCE_PRIORITY = ["local", "import", "git", "skillssh"];
+const VISIBLE_TARGET_ICON_LIMIT = 5;
 
 export interface GlobalSheetTarget {
   kind: "global";
@@ -78,7 +78,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
 
   const initialAgents = target.kind === "project" ? target.initialSelectedAgents : [];
   const [selectedAgents, setSelectedAgents] = useState<string[]>(initialAgents);
-  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [showInactiveAgents, setShowInactiveAgents] = useState(false);
 
   const [dirNameMap, setDirNameMap] = useState<Record<string, string>>({});
@@ -240,12 +239,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     });
   };
 
-  const resetTarget = () => {
-    setSelectedIds(new Set());
-    setSelectedAgents([]);
-    setAgentPickerOpen(true);
-  };
-
   const toggleAgent = (key: string) => {
     setSelectedAgents((prev) => {
       const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
@@ -254,8 +247,13 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
       }
       return next;
     });
-    // Changing target invalidates the current selection
-    setSelectedIds(new Set());
+  };
+
+  const setAllEnabledAgents = (next: string[]) => {
+    setSelectedAgents(next);
+    if (target.kind === "project") {
+      target.onPersistLastUsed(next);
+    }
   };
 
   const selectableSelected = useMemo(
@@ -269,6 +267,49 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
 
   const projectCtx = ctx.kind === "project" ? (ctx as ProjectPickerContext) : null;
   const projectNamesReady = target.kind !== "project" || dirNameMapError || !dirNameMapLoading;
+  const enabledTargets = target.kind === "project"
+    ? target.exportTargets.filter((tt) => tt.installed && tt.enabled)
+    : [];
+  const inactiveTargets = target.kind === "project"
+    ? target.exportTargets.filter((tt) => !tt.installed || !tt.enabled)
+    : [];
+
+  const renderAgentIcons = (
+    agents: { key: string; display_name: string }[],
+    options: { dim?: string; limit?: number } = {},
+  ) => {
+    const dim = options.dim ?? "h-6 w-6";
+    const limit = options.limit ?? VISIBLE_TARGET_ICON_LIMIT;
+    const visible = agents.slice(0, limit);
+    const hiddenCount = agents.length - visible.length;
+
+    return (
+      <span className="flex shrink-0 items-center -space-x-1.5">
+        {visible.map((agent) => (
+          <AgentIcon
+            key={agent.key}
+            agentKey={agent.key}
+            displayName={agent.display_name}
+            className={cn(
+              dim,
+              "rounded-[6px] border border-bg-secondary bg-surface shadow-[0_0_0_1px_var(--color-border-subtle)]",
+            )}
+          />
+        ))}
+        {hiddenCount > 0 && (
+          <span
+            className={cn(
+              dim,
+              "inline-flex items-center justify-center rounded-[6px] border border-bg-secondary bg-surface text-[10px] font-semibold text-muted shadow-[0_0_0_1px_var(--color-border-subtle)]",
+            )}
+            title={`+${hiddenCount}`}
+          >
+            +{hiddenCount}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   const ctaLabel = (() => {
     const count = selectableSelected.length;
@@ -340,128 +381,124 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     if (target.kind === "global") {
       return (
         <div className="flex items-center gap-2 text-[12px] text-muted">
-          <span>{t("addFromLibrary.targetLabel")}</span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-surface px-2.5 py-1 text-[12px] font-medium text-secondary">
-            <AgentIcon
-              agentKey={target.agentKey}
-              displayName={target.agentDisplayName}
-              className="h-4 w-4 rounded-[4px]"
-            />
-            {target.agentDisplayName}
+          <span className="shrink-0">{t("addFromLibrary.targetLabel")}</span>
+          <span className="inline-flex min-w-0 items-center gap-2 rounded-full border border-border-subtle bg-surface px-2.5 py-1 text-[12px] font-medium text-secondary">
+            {renderAgentIcons([{ key: target.agentKey, display_name: target.agentDisplayName }], {
+              dim: "h-5 w-5",
+              limit: 1,
+            })}
+            <span className="truncate">{target.agentDisplayName}</span>
           </span>
         </div>
       );
     }
-    const selected = target.exportTargets.filter((tt) => selectedAgents.includes(tt.key));
-    return (
-      <div>
-        <div className="flex items-center gap-2 text-[12px] text-muted">
-          <span>{t("addFromLibrary.targetLabel")}</span>
-          {selected.length === 0 ? (
-            <span className="text-muted italic">{t("addFromLibrary.noTargetSelected")}</span>
-          ) : (
-            <span className="flex flex-wrap items-center gap-1.5">
-              {selected.map((tt) => (
-                <span
-                  key={tt.key}
-                  className="inline-flex items-center gap-1 rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-[12px] font-medium text-secondary"
-                >
-                  <AgentIcon
-                    agentKey={tt.key}
-                    displayName={tt.display_name}
-                    className="h-3.5 w-3.5 rounded-[3px]"
-                  />
-                  {tt.display_name}
-                </span>
-              ))}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={resetTarget}
-            className="ml-auto text-[12px] text-accent-light hover:underline"
-          >
-            {t("addFromLibrary.changeTarget")}
-          </button>
-        </div>
-      </div>
-    );
-  })();
 
-  const projectAgentPicker = target.kind === "project" && agentPickerOpen ? (
-    <div className="mt-2 rounded-lg border border-border-subtle bg-background">
-      <div className="max-h-[200px] overflow-y-auto px-3 py-3 scrollbar-hide">
-        <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-          {t("project.enabledAgents")}
+    const allSelected =
+      enabledTargets.length > 0 && enabledTargets.every((tt) => selectedAgents.includes(tt.key));
+    const toggleAll = () => {
+      if (allSelected) {
+        setAllEnabledAgents([]);
+      } else {
+        setAllEnabledAgents(enabledTargets.map((tt) => tt.key));
+      }
+    };
+
+    return (
+      <div className="space-y-2">
+        <div className="flex items-start gap-2 text-[12px]">
+          <span className="shrink-0 pt-1 text-muted">{t("addFromLibrary.targetLabel")}</span>
+          <div className="min-w-0 flex-1">
+            {enabledTargets.length === 0 ? (
+              <span className="inline-flex items-center rounded-full border border-dashed border-border px-2.5 py-1 italic text-muted">
+                {t("addFromLibrary.noTargetSelected")}
+              </span>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {enabledTargets.map((tt) => {
+                  const active = selectedAgents.includes(tt.key);
+                  return (
+                    <button
+                      key={tt.key}
+                      type="button"
+                      onClick={() => toggleAgent(tt.key)}
+                      aria-pressed={active}
+                      title={tt.display_name}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                        active
+                          ? "border-accent-border bg-accent-bg text-accent-light"
+                          : "border-border-subtle bg-surface text-muted hover:bg-surface-hover hover:text-secondary",
+                      )}
+                    >
+                      <span className="relative inline-flex">
+                        <AgentIcon
+                          agentKey={tt.key}
+                          displayName={tt.display_name}
+                          className={cn(
+                            "h-5 w-5 rounded-full border-0 bg-transparent",
+                            !active && "opacity-60",
+                          )}
+                        />
+                        {active && (
+                          <span className="absolute -right-0.5 -top-0.5 inline-flex h-3 w-3 items-center justify-center rounded-full bg-accent text-white">
+                            <CheckCircle2 className="h-2.5 w-2.5" strokeWidth={3} />
+                          </span>
+                        )}
+                      </span>
+                      <span>{tt.display_name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {enabledTargets.length > 0 && (
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="shrink-0 pt-1 text-[12px] text-accent-light transition-colors hover:underline"
+            >
+              {allSelected ? t("addFromLibrary.clearTargets") : t("addFromLibrary.selectAllTargets")}
+            </button>
+          )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {target.exportTargets
-            .filter((tt) => tt.installed && tt.enabled)
-            .map((tt) => {
-              const active = selectedAgents.includes(tt.key);
-              return (
-                <button
-                  key={tt.key}
-                  onClick={() => toggleAgent(tt.key)}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium transition-colors",
-                    active
-                      ? "border-accent-border bg-accent-bg text-accent-light"
-                      : "border-border-subtle text-muted hover:border-border hover:text-secondary",
-                  )}
-                >
-                  {active ? <SquareCheck className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-                  <AgentIcon
-                    agentKey={tt.key}
-                    displayName={tt.display_name}
-                    className="h-5 w-5 rounded-[5px]"
-                  />
-                  {tt.display_name}
-                </button>
-              );
-            })}
-        </div>
-        {target.exportTargets.some((tt) => !tt.installed || !tt.enabled) && (
-          <div className="mt-3 border-t border-border-subtle pt-3">
+        {inactiveTargets.length > 0 && (
+          <div className="ml-12">
             <button
               type="button"
               onClick={() => setShowInactiveAgents((prev) => !prev)}
-              className="flex w-full items-center justify-between text-[12px] font-medium text-muted hover:text-secondary"
+              className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-secondary"
             >
-              <span>
-                {t("project.moreAgents", {
-                  count: target.exportTargets.filter((tt) => !tt.installed || !tt.enabled).length,
-                })}
-              </span>
-              {showInactiveAgents ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              {showInactiveAgents ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+              <span>{t("project.moreAgents", { count: inactiveTargets.length })}</span>
             </button>
             {showInactiveAgents && (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {target.exportTargets
-                  .filter((tt) => !tt.installed || !tt.enabled)
-                  .map((tt) => (
-                    <button
-                      key={tt.key}
-                      disabled
-                      title={t("addFromLibrary.tooltip.unavailable")}
-                      className="inline-flex cursor-default items-center gap-1.5 rounded-full border border-border-subtle px-3 py-1.5 text-[12px] font-medium text-muted opacity-60"
-                    >
-                      <Square className="h-3.5 w-3.5" />
-                      <AgentIcon
-                        agentKey={tt.key}
-                        displayName={tt.display_name}
-                        className="h-5 w-5 rounded-[5px]"
-                      />
-                      {tt.display_name}
-                    </button>
-                  ))}
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {inactiveTargets.map((tt) => (
+                  <span
+                    key={tt.key}
+                    title={t("addFromLibrary.tooltip.unavailable")}
+                    className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-border-subtle bg-background py-1 pl-1 pr-2.5 text-[12px] font-medium text-muted opacity-55"
+                  >
+                    <AgentIcon
+                      agentKey={tt.key}
+                      displayName={tt.display_name}
+                      className="h-5 w-5 rounded-full border-0 bg-transparent"
+                    />
+                    <span>{tt.display_name}</span>
+                  </span>
+                ))}
               </div>
             )}
           </div>
         )}
       </div>
-    </div>
-  ) : null;
+    );
+  })();
 
   return (
     <div className="fixed inset-0 z-50">
@@ -485,8 +522,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
             <X className="h-4 w-4" />
           </button>
         </div>
-
-        {target.kind === "project" && projectAgentPicker}
 
         <div className="shrink-0 border-b border-border-subtle px-5 py-3">
           <div className="relative">

@@ -588,6 +588,8 @@
     "targetLabel": "Target:",
     "noTargetSelected": "no target",
     "changeTarget": "Change target",
+    "selectAllTargets": "Select all",
+    "clearTargets": "Clear",
     "searchPlaceholder": "Search the library…",
     "emptyLibrary": "Your library is empty",
     "emptyMatch": "No skills match",

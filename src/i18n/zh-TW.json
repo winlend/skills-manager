@@ -529,6 +529,8 @@
     "targetLabel": "目標：",
     "noTargetSelected": "未選擇",
     "changeTarget": "更換目標",
+    "selectAllTargets": "全選",
+    "clearTargets": "清空",
     "searchPlaceholder": "搜尋技能庫…",
     "emptyLibrary": "技能庫為空",
     "emptyMatch": "沒有符合的 Skill",
