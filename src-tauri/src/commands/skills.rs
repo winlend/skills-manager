@@ -18,6 +18,7 @@ use crate::core::{
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
     sync_engine, sync_metadata,
+    timing::should_log_first_or_slow,
 };
 
 #[derive(Debug, Serialize)]
@@ -151,6 +152,8 @@ impl Drop for CancelRegistrationGuard {
     }
 }
 
+static GET_MANAGED_SKILLS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
+
 #[tauri::command]
 pub async fn get_managed_skills(
     store: State<'_, Arc<SkillStore>>,
@@ -166,10 +169,10 @@ pub async fn get_managed_skills(
             .into_iter()
             .map(|skill| managed_skill_to_dto(&store, skill, &all_targets, &tags_map))
             .collect();
-        log::info!(
-            "get_managed_skills: {count} skills in {} ms",
-            start.elapsed().as_millis()
-        );
+        let elapsed_ms = start.elapsed().as_millis();
+        if should_log_first_or_slow(&GET_MANAGED_SKILLS_FIRST_CALL, elapsed_ms, 100) {
+            log::info!("get_managed_skills: {count} skills in {elapsed_ms} ms");
+        }
         Ok(dtos)
     })
     .await?

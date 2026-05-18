@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::State;
@@ -9,6 +10,7 @@ use crate::core::{
     scenario_service,
     skill_store::{ScenarioRecord, SkillStore},
     sync_engine, sync_metadata,
+    timing::should_log_first_or_slow,
 };
 
 fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
@@ -39,6 +41,8 @@ pub struct PresetDto {
     pub updated_at: i64,
 }
 
+static GET_PRESETS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
+
 #[tauri::command]
 pub async fn get_presets(
     store: State<'_, Arc<SkillStore>>,
@@ -62,10 +66,10 @@ pub async fn get_presets(
                 updated_at: s.updated_at,
             });
         }
-        log::info!(
-            "get_presets: {count} presets in {} ms",
-            start.elapsed().as_millis()
-        );
+        let elapsed_ms = start.elapsed().as_millis();
+        if should_log_first_or_slow(&GET_PRESETS_FIRST_CALL, elapsed_ms, 100) {
+            log::info!("get_presets: {count} presets in {elapsed_ms} ms");
+        }
         Ok(result)
     })
     .await?

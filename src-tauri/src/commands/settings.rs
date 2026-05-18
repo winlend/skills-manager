@@ -27,9 +27,23 @@ pub async fn get_settings(
 /// milliseconds into the backend log file. Used to correlate WebView2 boot,
 /// first paint, and refreshAppData timing with Rust-side startup logs when
 /// debugging slow launches (see issue #153).
+///
+/// `label` is sanitized (control chars stripped, capped at 64 chars) so a
+/// buggy or malicious caller cannot inject newlines that would corrupt the
+/// log file layout.
 #[tauri::command]
 pub fn log_startup_event(label: String, elapsed_ms: u64) {
-    log::info!("frontend startup: {label} {elapsed_ms} ms");
+    let sanitized: String = label
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect();
+    let display = if sanitized.is_empty() {
+        "(empty)".to_string()
+    } else {
+        sanitized
+    };
+    log::info!("frontend startup: {display} {elapsed_ms} ms");
 }
 
 #[tauri::command]

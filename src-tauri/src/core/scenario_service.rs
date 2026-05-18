@@ -117,6 +117,7 @@ pub fn sync_desired_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
 ) -> Result<(), AppError> {
+    let batch_start = Instant::now();
     let existing_targets: HashMap<(String, String), SkillTargetRecord> = store
         .get_all_targets()
         .map_err(AppError::db)?
@@ -124,7 +125,6 @@ pub fn sync_desired_targets(
         .map(|target| ((target.skill_id.clone(), target.tool.clone()), target))
         .collect();
 
-    let batch_start = Instant::now();
     let mut synced_count = 0usize;
     let mut skipped_count = 0usize;
     let mut failed_count = 0usize;

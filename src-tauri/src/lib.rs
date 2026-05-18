@@ -339,7 +339,8 @@ pub fn quit_app(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let pre_builder_start = Instant::now();
-    let store = core::app_state::initialize_store().expect("Failed to initialize app state");
+    let (store, startup_timings) =
+        core::app_state::initialize_store().expect("Failed to initialize app state");
     let pre_builder_ms = pre_builder_start.elapsed().as_millis();
     let store_for_setup = store.clone();
 
@@ -358,6 +359,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
+            // Snapshot the builder->setup gap BEFORE doing any work in setup,
+            // so the label reflects only the time Tauri spent constructing
+            // the App between Builder::default() and invoking this callback.
+            let builder_to_setup_ms = builder_start.elapsed().as_millis();
             let setup_start = Instant::now();
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
@@ -392,8 +397,9 @@ pub fn run() {
             log::info!(
                 "startup: pre_builder {} ms, builder_to_setup {} ms",
                 pre_builder_ms,
-                builder_start.elapsed().as_millis()
+                builder_to_setup_ms
             );
+            startup_timings.log();
 
             let step = Instant::now();
             if is_tray_icon_enabled(&store_for_setup) {
