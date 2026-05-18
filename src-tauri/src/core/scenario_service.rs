@@ -119,6 +119,30 @@ pub fn preview_scenario_sync(
     })
 }
 
+/// Decide which `SyncMode` `is_target_current` should compare against, or
+/// `None` if the existing target's mode is incompatible with the desired
+/// mode and the skip path must be refused.
+///
+/// Returns `Some(existing)` when both modes match exactly. Also returns
+/// `Some(Copy)` when the existing record is `"copy"` but the desired
+/// mode is `Symlink` — this is the Windows fallback case (issue #153):
+/// `symlink_dir()` failed on a prior run and we landed in copy mode, so
+/// every subsequent startup would re-attempt symlink, fail again, and
+/// trigger a full recursive copy. Treating the existing copy as
+/// compatible lets the hash gate skip when the source hasn't changed.
+///
+/// The reverse direction (existing `"symlink"`, desired `Copy`) returns
+/// `None` because the user actively changed the `sync_mode` setting and
+/// the on-disk symlink doesn't reflect that intent.
+fn skip_check_mode(existing_mode: &str, desired: sync_engine::SyncMode) -> Option<sync_engine::SyncMode> {
+    match (existing_mode, desired) {
+        ("symlink", sync_engine::SyncMode::Symlink) => Some(sync_engine::SyncMode::Symlink),
+        ("copy", sync_engine::SyncMode::Copy) => Some(sync_engine::SyncMode::Copy),
+        ("copy", sync_engine::SyncMode::Symlink) => Some(sync_engine::SyncMode::Copy),
+        _ => None,
+    }
+}
+
 pub fn sync_desired_targets(
     store: &SkillStore,
     desired_targets: &[ScenarioSyncTarget],
@@ -154,18 +178,19 @@ pub fn sync_desired_targets(
                         desired.tool
                     );
                 }
-            } else if existing.mode == desired.mode.as_str()
-                && existing.status == "ok"
-                && sync_engine::is_target_current(
-                    &desired.source,
-                    &desired.target,
-                    desired.mode,
-                    existing.source_hash.as_deref(),
-                    desired.source_hash.as_deref(),
-                )
-            {
-                skipped_count += 1;
-                continue;
+            } else if existing.status == "ok" {
+                if let Some(check_mode) = skip_check_mode(&existing.mode, desired.mode) {
+                    if sync_engine::is_target_current(
+                        &desired.source,
+                        &desired.target,
+                        check_mode,
+                        existing.source_hash.as_deref(),
+                        desired.source_hash.as_deref(),
+                    ) {
+                        skipped_count += 1;
+                        continue;
+                    }
+                }
             }
         }
 
@@ -525,4 +550,47 @@ pub fn sync_single_skill_to_tool(
 
     store.insert_target(&target_record).map_err(AppError::db)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod skip_check_mode_tests {
+    use super::skip_check_mode;
+    use super::sync_engine::SyncMode;
+
+    #[test]
+    fn matching_modes_are_compatible() {
+        assert!(matches!(
+            skip_check_mode("symlink", SyncMode::Symlink),
+            Some(SyncMode::Symlink)
+        ));
+        assert!(matches!(
+            skip_check_mode("copy", SyncMode::Copy),
+            Some(SyncMode::Copy)
+        ));
+    }
+
+    #[test]
+    fn copy_existing_with_symlink_desired_treated_as_copy() {
+        // Windows fallback case (issue #153): record says copy because
+        // symlink_dir failed previously. We accept that and let the hash
+        // gate decide freshness, instead of re-attempting symlink and
+        // triggering a full recopy on every startup.
+        assert!(matches!(
+            skip_check_mode("copy", SyncMode::Symlink),
+            Some(SyncMode::Copy)
+        ));
+    }
+
+    #[test]
+    fn symlink_existing_with_copy_desired_is_incompatible() {
+        // User flipped sync_mode setting from symlink to copy — the
+        // on-disk symlink no longer reflects intent, must resync.
+        assert!(skip_check_mode("symlink", SyncMode::Copy).is_none());
+    }
+
+    #[test]
+    fn unknown_existing_mode_is_incompatible() {
+        assert!(skip_check_mode("garbage", SyncMode::Symlink).is_none());
+        assert!(skip_check_mode("", SyncMode::Copy).is_none());
+    }
 }
