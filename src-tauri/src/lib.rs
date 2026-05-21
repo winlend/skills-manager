@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
 pub mod commands;
@@ -8,9 +9,23 @@ pub mod core;
 
 /// Shared flag: when true, CloseRequested should NOT be prevented.
 pub static QUITTING: AtomicBool = AtomicBool::new(false);
-static TRAY_PRESET_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Guards every tray-initiated mutation (preset apply/remove, manual update check)
+/// so a quick double-click can't fire two batches at once.
+static TRAY_BUSY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Tracks whether a manual "Check for skill updates" is currently running so the
+/// tray menu can render a disabled "Checking for updates..." label.
+static TRAY_CHECK_UPDATES_RUNNING: AtomicBool = AtomicBool::new(false);
+
 const MAIN_TRAY_ID: &str = "main-tray";
-const TRAY_PRESET_ITEM_PREFIX: &str = "tray-preset:";
+const TRAY_PRESET_ADD_PREFIX: &str = "tray-preset-add:";
+const TRAY_PRESET_REMOVE_PREFIX: &str = "tray-preset-remove:";
+const TRAY_OPEN_UPDATES_ID: &str = "tray-open-updates";
+const TRAY_OPEN_FOLDER_ID: &str = "tray-open-folder";
+const TRAY_CHECK_UPDATES_ID: &str = "tray-check-updates";
+const TRAY_OPEN_UPDATES_EVENT: &str = "tray-open-updates";
+
 #[cfg(target_os = "macos")]
 const CUSTOM_TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray/tray-icon-32.png");
 #[cfg(not(target_os = "macos"))]
@@ -86,96 +101,342 @@ fn load_custom_tray_icon() -> Option<tauri::image::Image<'static>> {
     ))
 }
 
-fn tray_preset_item_id(preset_id: &str) -> String {
-    format!("{TRAY_PRESET_ITEM_PREFIX}{preset_id}")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayPresetStatus {
+    Empty,
+    Inactive,
+    Partial,
+    Active,
 }
 
-fn preset_id_from_tray_item(menu_id: &str) -> Option<&str> {
-    menu_id.strip_prefix(TRAY_PRESET_ITEM_PREFIX)
+#[derive(Debug, Clone)]
+struct TrayPresetEntry {
+    id: String,
+    name: String,
+    skill_count: usize,
+    synced_pairs: usize,
+    total_pairs: usize,
+}
+
+impl TrayPresetEntry {
+    fn status(&self) -> TrayPresetStatus {
+        if self.total_pairs == 0 {
+            TrayPresetStatus::Empty
+        } else if self.synced_pairs == 0 {
+            TrayPresetStatus::Inactive
+        } else if self.synced_pairs >= self.total_pairs {
+            TrayPresetStatus::Active
+        } else {
+            TrayPresetStatus::Partial
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TrayMenuData {
+    total_skills: usize,
+    coding_agent_count: usize,
+    update_count: usize,
+    presets: Vec<TrayPresetEntry>,
+    check_updates_running: bool,
+}
+
+fn collect_tray_menu_data(store: &core::skill_store::SkillStore) -> TrayMenuData {
+    let all_skills = store.get_all_skills().unwrap_or_default();
+    let total_skills = all_skills.len();
+    let update_count = all_skills
+        .iter()
+        .filter(|s| s.update_status == "update_available")
+        .count();
+
+    let coding_keys: Vec<String> = core::tool_adapters::enabled_installed_adapters(store)
+        .into_iter()
+        .filter(|adapter| matches!(adapter.category, core::tool_adapters::ToolCategory::Coding))
+        .map(|adapter| adapter.key)
+        .collect();
+    let coding_agent_count = coding_keys.len();
+    let coding_set: HashSet<&str> = coding_keys.iter().map(String::as_str).collect();
+
+    let synced_pairs_set: HashSet<(String, String)> = store
+        .get_all_targets()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|target| coding_set.contains(target.tool.as_str()))
+        .map(|target| (target.skill_id, target.tool))
+        .collect();
+
+    let scenarios = store.get_all_scenarios().unwrap_or_default();
+    let mut presets = Vec::with_capacity(scenarios.len());
+    for scenario in scenarios {
+        let skill_ids = store
+            .get_skill_ids_for_scenario(&scenario.id)
+            .unwrap_or_default();
+        let skill_count = skill_ids.len();
+        let total_pairs = skill_count * coding_agent_count;
+        let mut synced_pairs = 0usize;
+        if total_pairs > 0 {
+            for sid in &skill_ids {
+                for tk in &coding_keys {
+                    if synced_pairs_set.contains(&(sid.clone(), tk.clone())) {
+                        synced_pairs += 1;
+                    }
+                }
+            }
+        }
+        presets.push(TrayPresetEntry {
+            id: scenario.id,
+            name: scenario.name,
+            skill_count,
+            synced_pairs,
+            total_pairs,
+        });
+    }
+
+    TrayMenuData {
+        total_skills,
+        coding_agent_count,
+        update_count,
+        presets,
+        check_updates_running: TRAY_CHECK_UPDATES_RUNNING.load(Ordering::SeqCst),
+    }
+}
+
+fn format_status_line(data: &TrayMenuData) -> String {
+    let skill_label = if data.total_skills == 1 { "skill" } else { "skills" };
+    let agent_label = if data.coding_agent_count == 1 { "agent" } else { "agents" };
+    format!(
+        "{} {} · {} {} connected",
+        data.total_skills, skill_label, data.coding_agent_count, agent_label
+    )
+}
+
+fn format_tooltip(data: &TrayMenuData) -> String {
+    if data.update_count > 0 {
+        format!(
+            "Skills Manager · {} skills · {} agents · {} updates",
+            data.total_skills, data.coding_agent_count, data.update_count
+        )
+    } else {
+        format!(
+            "Skills Manager · {} skills · {} agents",
+            data.total_skills, data.coding_agent_count
+        )
+    }
+}
+
+fn preset_menu_item_id(preset: &TrayPresetEntry) -> (String, &'static str) {
+    // E1 semantics: only a fully-active preset removes on click. Partial
+    // and inactive both fill missing pairs up to fully active.
+    match preset.status() {
+        TrayPresetStatus::Active => (
+            format!("{TRAY_PRESET_REMOVE_PREFIX}{}", preset.id),
+            "remove",
+        ),
+        _ => (format!("{TRAY_PRESET_ADD_PREFIX}{}", preset.id), "add"),
+    }
+}
+
+fn preset_menu_label(preset: &TrayPresetEntry) -> String {
+    let unit = if preset.skill_count == 1 { "skill" } else { "skills" };
+    match preset.status() {
+        TrayPresetStatus::Active => format!("✓ {} ({} {unit})", preset.name, preset.skill_count),
+        TrayPresetStatus::Partial => format!(
+            "{} ({}/{} synced)",
+            preset.name, preset.synced_pairs, preset.total_pairs
+        ),
+        _ => format!("{} ({} {unit})", preset.name, preset.skill_count),
+    }
+}
+
+fn preset_id_from_menu_id(menu_id: &str) -> Option<(&str, scenario_service_alias::BatchApplyMode)> {
+    if let Some(id) = menu_id.strip_prefix(TRAY_PRESET_ADD_PREFIX) {
+        return Some((id, scenario_service_alias::BatchApplyMode::Add));
+    }
+    if let Some(id) = menu_id.strip_prefix(TRAY_PRESET_REMOVE_PREFIX) {
+        return Some((id, scenario_service_alias::BatchApplyMode::Remove));
+    }
+    None
+}
+
+mod scenario_service_alias {
+    pub use crate::core::scenario_service::BatchApplyMode;
 }
 
 fn build_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     store: &Arc<core::skill_store::SkillStore>,
-) -> tauri::Result<tauri::menu::Menu<R>> {
-    use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+) -> tauri::Result<(tauri::menu::Menu<R>, String)> {
+    let data = collect_tray_menu_data(store);
+    build_tray_menu_from_data(app, &data)
+}
+
+fn build_tray_menu_from_data<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    data: &TrayMenuData,
+) -> tauri::Result<(tauri::menu::Menu<R>, String)> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
     let menu = Menu::new(app)?;
+
     let app_name = MenuItem::with_id(app, "tray-app-name", "Skills Manager", false, None::<&str>)?;
     menu.append(&app_name)?;
 
-    let active_id = store.get_active_scenario_id().ok().flatten();
-    let scenarios = store.get_all_scenarios().unwrap_or_default();
-    let active_name = active_id.as_deref().and_then(|id| {
-        scenarios
-            .iter()
-            .find(|scenario| scenario.id == id)
-            .map(|scenario| scenario.name.as_str())
-    });
-    let active_label = MenuItem::with_id(
+    let status_line = MenuItem::with_id(
         app,
-        "tray-active-preset",
-        format!("Current: {}", active_name.unwrap_or("None")),
+        "tray-status-line",
+        format_status_line(data),
         false,
         None::<&str>,
     )?;
-    menu.append(&active_label)?;
+    menu.append(&status_line)?;
 
-    let first_separator = PredefinedMenuItem::separator(app)?;
-    menu.append(&first_separator)?;
+    if data.update_count > 0 {
+        let updates_label = if data.update_count == 1 {
+            "1 skill update available".to_string()
+        } else {
+            format!("{} skill updates available", data.update_count)
+        };
+        let updates_item =
+            MenuItem::with_id(app, TRAY_OPEN_UPDATES_ID, updates_label, true, None::<&str>)?;
+        menu.append(&updates_item)?;
+    }
 
-    let scenario_submenu = Submenu::new(app, "Switch Preset", true)?;
-    if scenarios.is_empty() {
-        let empty_item = MenuItem::with_id(
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+
+    let presets_submenu = Submenu::new(app, "Presets", true)?;
+    if data.coding_agent_count == 0 {
+        let no_agents = MenuItem::with_id(
             app,
-            "tray-no-presets",
-            "No presets",
+            "tray-presets-no-agents",
+            "No coding agents connected",
             false,
             None::<&str>,
         )?;
-        scenario_submenu.append(&empty_item)?;
+        presets_submenu.append(&no_agents)?;
     } else {
-        for scenario in scenarios {
-            let checked = active_id.as_deref() == Some(scenario.id.as_str());
-            let scenario_item = CheckMenuItem::with_id(
+        let visible: Vec<_> = data
+            .presets
+            .iter()
+            .filter(|p| !matches!(p.status(), TrayPresetStatus::Empty))
+            .collect();
+        if visible.is_empty() {
+            let empty = MenuItem::with_id(
                 app,
-                tray_preset_item_id(&scenario.id),
-                scenario.name,
-                true,
-                checked,
+                "tray-presets-empty",
+                "No presets with skills",
+                false,
                 None::<&str>,
             )?;
-            scenario_submenu.append(&scenario_item)?;
+            presets_submenu.append(&empty)?;
+        } else {
+            for preset in visible {
+                let (id, _action) = preset_menu_item_id(preset);
+                let label = preset_menu_label(preset);
+                let item = MenuItem::with_id(app, id, label, true, None::<&str>)?;
+                presets_submenu.append(&item)?;
+            }
         }
     }
-    menu.append(&scenario_submenu)?;
+    menu.append(&presets_submenu)?;
 
-    let second_separator = PredefinedMenuItem::separator(app)?;
-    menu.append(&second_separator)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
 
     let show_item = MenuItem::with_id(app, "show", "Open Skills Manager", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     menu.append(&show_item)?;
+
+    let check_label = if data.check_updates_running {
+        "Checking for updates..."
+    } else {
+        "Check for skill updates"
+    };
+    let check_item = MenuItem::with_id(
+        app,
+        TRAY_CHECK_UPDATES_ID,
+        check_label,
+        !data.check_updates_running,
+        None::<&str>,
+    )?;
+    menu.append(&check_item)?;
+
+    let folder_item = MenuItem::with_id(
+        app,
+        TRAY_OPEN_FOLDER_ID,
+        "Open Skills Folder",
+        true,
+        None::<&str>,
+    )?;
+    menu.append(&folder_item)?;
+
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     menu.append(&quit_item)?;
 
-    Ok(menu)
+    Ok((menu, format_tooltip(data)))
 }
 
 pub(crate) fn refresh_tray_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<(), String> {
-    let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) else {
+    if app.tray_by_id(MAIN_TRAY_ID).is_none() {
         return Ok(());
-    };
+    }
     let store = app
         .state::<Arc<core::skill_store::SkillStore>>()
         .inner()
         .clone();
-    let menu = build_tray_menu(app, &store).map_err(|e| e.to_string())?;
-    tray.set_menu(Some(menu)).map_err(|e| e.to_string())
+    // Collect data off the main thread (DB reads are cheap, no FFI). The
+    // actual `Menu::new`, `set_menu`, `set_tooltip` calls hit native macOS
+    // (NSMenu / NSStatusItem) APIs and MUST run on the main thread — calling
+    // them from a worker thread is UB and crashed the app with a
+    // `slice::from_raw_parts` alignment panic during repeated tray actions.
+    let data = collect_tray_menu_data(&store);
+    let app_for_main = app.clone();
+    app.run_on_main_thread(move || {
+        let Some(tray) = app_for_main.tray_by_id(MAIN_TRAY_ID) else {
+            return;
+        };
+        match build_tray_menu_from_data(&app_for_main, &data) {
+            Ok((menu, tooltip)) => {
+                if let Err(err) = tray.set_menu(Some(menu)) {
+                    log::warn!("tray set_menu failed: {err}");
+                }
+                if let Err(err) = tray.set_tooltip(Some(&tooltip)) {
+                    log::warn!("tray set_tooltip failed: {err}");
+                }
+            }
+            Err(err) => log::warn!("build_tray_menu_from_data failed: {err}"),
+        }
+    })
+    .map_err(|e| e.to_string())
 }
 
-fn switch_preset_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>, preset_id: &str) {
+/// Coalesce bursts into at most one tray rebuild per 300 ms window. Avoids
+/// rebuilding the menu N times when `PresetBar` loops `skill × agent` calls
+/// through `sync_skill_to_tool`. The first request schedules the rebuild;
+/// any further requests during the wait window are absorbed.
+static TRAY_REFRESH_PENDING: AtomicBool = AtomicBool::new(false);
+const TRAY_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
+
+pub(crate) fn schedule_tray_refresh(app: &tauri::AppHandle) {
+    if TRAY_REFRESH_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(TRAY_REFRESH_DEBOUNCE).await;
+        TRAY_REFRESH_PENDING.store(false, Ordering::SeqCst);
+        if let Err(err) = refresh_tray_menu(&app) {
+            log::debug!("debounced tray refresh failed: {err}");
+        }
+    });
+}
+
+fn apply_preset_from_tray<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    preset_id: &str,
+    mode: core::scenario_service::BatchApplyMode,
+) {
     let store = app
         .state::<Arc<core::skill_store::SkillStore>>()
         .inner()
@@ -186,52 +447,168 @@ fn switch_preset_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>, preset_
     tauri::async_runtime::spawn(async move {
         let store_for_task = store.clone();
         let preset_id_for_task = preset_id.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            let _switch_guard = TRAY_PRESET_SWITCH_LOCK
-                .lock()
-                .map_err(|_| "Tray preset switch lock poisoned".to_string())?;
-            let scenario_exists = store_for_task
-                .get_all_scenarios()
-                .map_err(|e| e.to_string())?
-                .iter()
-                .any(|scenario| scenario.id == preset_id_for_task);
-            if !scenario_exists {
-                return Err("Preset not found".to_string());
-            }
-            let current_active = store_for_task
-                .get_active_scenario_id()
+        let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let _guard = match TRAY_BUSY.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    log::debug!("Tray busy, skipping preset apply for {preset_id_for_task}");
+                    return Ok(());
+                }
+            };
+            core::scenario_service::ensure_scenario_exists(&store_for_task, &preset_id_for_task)
                 .map_err(|e| e.to_string())?;
-            if current_active.as_deref() == Some(&preset_id_for_task) {
-                return Ok(false);
-            }
-            if let Some(old_id) = current_active.as_deref() {
-                commands::presets::unsync_scenario_skills(&store_for_task, old_id)
-                    .map_err(|e| e.to_string())?;
-            }
-            store_for_task
-                .set_active_scenario(&preset_id_for_task)
+            let skill_ids = store_for_task
+                .get_skill_ids_for_scenario(&preset_id_for_task)
                 .map_err(|e| e.to_string())?;
-            commands::presets::sync_scenario_skills(&store_for_task, &preset_id_for_task)
-                .map_err(|e| e.to_string())?;
-            Ok::<bool, String>(true)
+            if skill_ids.is_empty() {
+                return Ok(());
+            }
+            let tool_keys: Vec<String> =
+                core::tool_adapters::enabled_installed_adapters(&store_for_task)
+                    .into_iter()
+                    .filter(|adapter| {
+                        matches!(adapter.category, core::tool_adapters::ToolCategory::Coding)
+                    })
+                    .map(|adapter| adapter.key)
+                    .collect();
+            if tool_keys.is_empty() {
+                return Ok(());
+            }
+            core::scenario_service::apply_skills_to_tools(
+                &store_for_task,
+                &skill_ids,
+                &tool_keys,
+                mode,
+            )
+            .map_err(|e| e.to_string())
         })
         .await;
 
         match result {
-            Ok(Ok(changed)) => {
-                if changed {
-                    if let Err(err) = refresh_tray_menu(&app) {
-                        log::warn!("Failed to refresh tray menu after tray preset switch: {err}");
-                    }
-                    if let Err(err) = app.emit("tray-preset-switched", preset_id) {
-                        log::warn!("Failed to emit tray-preset-switched: {err}");
-                    }
+            Ok(Ok(())) => {
+                if let Err(err) = refresh_tray_menu(&app) {
+                    log::warn!("Failed to refresh tray menu after preset apply: {err}");
+                }
+                if let Err(err) = app.emit("app-files-changed", ()) {
+                    log::warn!("Failed to emit app-files-changed after tray preset apply: {err}");
                 }
             }
-            Ok(Err(err)) => log::error!("Failed to switch preset from tray: {err}"),
-            Err(err) => log::error!("Preset switch task panicked: {err}"),
+            Ok(Err(err)) => log::error!("Tray preset apply failed for {preset_id}: {err}"),
+            Err(err) => log::error!("Tray preset apply task panicked: {err}"),
         }
     });
+}
+
+fn check_updates_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if TRAY_CHECK_UPDATES_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::debug!("Skill update check already running, ignoring tray trigger");
+        return;
+    }
+    if let Err(err) = refresh_tray_menu(app) {
+        log::warn!("Failed to refresh tray menu before update check: {err}");
+    }
+
+    let store = app
+        .state::<Arc<core::skill_store::SkillStore>>()
+        .inner()
+        .clone();
+    let app_handle = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let store_for_task = store.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            let _guard = TRAY_BUSY
+                .lock()
+                .map_err(|_| "Tray busy lock poisoned".to_string())?;
+            let proxy_url = store_for_task.proxy_url();
+            let ids: Vec<String> = store_for_task
+                .get_all_skills()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|skill| skill.id)
+                .collect();
+            for skill_id in ids {
+                let _repo_lock = match core::repo_lock::RepoLock::acquire("tray check skill update")
+                {
+                    Ok(lock) => lock,
+                    Err(err) => {
+                        log::warn!("Tray update check: failed to acquire repo lock for {skill_id}: {err}");
+                        continue;
+                    }
+                };
+                if let Err(err) = commands::skills::check_skill_update_internal(
+                    &store_for_task,
+                    &skill_id,
+                    true,
+                    proxy_url.as_deref(),
+                ) {
+                    log::warn!("Tray update check failed for {skill_id}: {err}");
+                }
+            }
+            Ok::<(), String>(())
+        })
+        .await;
+
+        TRAY_CHECK_UPDATES_RUNNING.store(false, Ordering::SeqCst);
+
+        match result {
+            Ok(Ok(())) => {
+                if let Err(err) = app_handle.emit("skills-auto-updated", ()) {
+                    log::warn!("Failed to emit skills-auto-updated after tray check: {err}");
+                }
+            }
+            Ok(Err(err)) => log::error!("Tray update check failed: {err}"),
+            Err(err) => log::error!("Tray update check task panicked: {err}"),
+        }
+
+        if let Err(err) = refresh_tray_menu(&app_handle) {
+            log::warn!("Failed to refresh tray menu after update check: {err}");
+        }
+    });
+}
+
+fn open_skills_folder_from_tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo_path = core::central_repo::base_dir();
+
+        #[cfg(target_os = "macos")]
+        let mut cmd = std::process::Command::new("open");
+        #[cfg(target_os = "windows")]
+        let mut cmd = {
+            let mut c = std::process::Command::new("explorer");
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000);
+            c
+        };
+        #[cfg(target_os = "linux")]
+        let mut cmd = std::process::Command::new("xdg-open");
+
+        let status = cmd.arg(&repo_path).status();
+        match status {
+            Ok(_status) => {
+                #[cfg(not(target_os = "windows"))]
+                if !_status.success() {
+                    log::warn!(
+                        "Tray open folder: file manager exited with status: {}",
+                        _status
+                    );
+                }
+            }
+            Err(err) => log::warn!("Tray open folder failed: {err}"),
+        }
+        let _ = app_handle;
+    });
+}
+
+fn open_updates_from_tray(app: &tauri::AppHandle) {
+    restore_main_window(app);
+    if let Err(err) = app.emit(TRAY_OPEN_UPDATES_EVENT, ()) {
+        log::warn!("Failed to emit {TRAY_OPEN_UPDATES_EVENT}: {err}");
+    }
 }
 
 fn ensure_tray_icon(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -245,24 +622,39 @@ fn ensure_tray_icon(app: &tauri::AppHandle) -> tauri::Result<()> {
         .state::<Arc<core::skill_store::SkillStore>>()
         .inner()
         .clone();
-    let menu = build_tray_menu(app, &store)?;
+    let (menu, tooltip) = build_tray_menu(app, &store)?;
 
     let mut builder = TrayIconBuilder::with_id(MAIN_TRAY_ID)
-        .tooltip("Skills Manager")
+        .tooltip(tooltip)
         .menu(&menu)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                log::debug!("Tray menu clicked: show");
-                restore_main_window(app)
-            }
-            "quit" => {
-                log::debug!("Tray menu clicked: quit");
-                request_quit(app)
-            }
-            id => {
-                if let Some(preset_id) = preset_id_from_tray_item(id) {
-                    log::debug!("Tray menu clicked: switch preset to {preset_id}");
-                    switch_preset_from_tray(app, preset_id);
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            match id {
+                "show" => {
+                    log::debug!("Tray menu clicked: show");
+                    restore_main_window(app)
+                }
+                "quit" => {
+                    log::debug!("Tray menu clicked: quit");
+                    request_quit(app)
+                }
+                TRAY_OPEN_UPDATES_ID => {
+                    log::debug!("Tray menu clicked: open updates");
+                    open_updates_from_tray(app);
+                }
+                TRAY_OPEN_FOLDER_ID => {
+                    log::debug!("Tray menu clicked: open skills folder");
+                    open_skills_folder_from_tray(app);
+                }
+                TRAY_CHECK_UPDATES_ID => {
+                    log::debug!("Tray menu clicked: check for updates");
+                    check_updates_from_tray(app);
+                }
+                other => {
+                    if let Some((preset_id, mode)) = preset_id_from_menu_id(other) {
+                        log::debug!("Tray menu clicked: preset {preset_id} mode {:?}", mode);
+                        apply_preset_from_tray(app, preset_id, mode);
+                    }
                 }
             }
         });
@@ -559,6 +951,7 @@ pub fn run() {
             commands::presets::delete_preset,
             commands::presets::switch_preset,
             commands::presets::apply_preset_to_default,
+            commands::presets::apply_preset_to_coding_agents,
             commands::presets::add_skill_to_preset,
             commands::presets::remove_skill_from_preset,
             commands::presets::reorder_presets,

@@ -162,7 +162,7 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 
 export function Settings() {
   const { t, i18n } = useTranslation();
-  const { tools, presets, refreshTools, refreshManagedSkills, openHelp } = useApp();
+  const { tools, presets, refreshTools, openHelp } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
   const [syncMode, setSyncMode] = useState("symlink");
@@ -189,8 +189,8 @@ export function Settings() {
   const [proxySaving, setProxySaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
   const [autoUpdateInterval, setAutoUpdateInterval] = useState("off");
+  const [autoUpdateApply, setAutoUpdateApply] = useState("off");
   const [autoUpdateLastRun, setAutoUpdateLastRun] = useState<string | null>(null);
-  const [autoUpdateChecking, setAutoUpdateChecking] = useState(false);
   // Agent path editing
   const [editingPathKey, setEditingPathKey] = useState<string | null>(null);
   const [editingPathValue, setEditingPathValue] = useState("");
@@ -326,6 +326,7 @@ export function Settings() {
     });
     api.getSettings("text_size").then((v) => { if (v) { setTextSize(v); applyTextSize(v); } });
     api.getSettings("auto_update_check_interval").then((v) => { if (v) setAutoUpdateInterval(v); });
+    api.getSettings("auto_update_apply").then((v) => { if (v) setAutoUpdateApply(v); });
     // The `skills-auto-updated` listener may populate this concurrently, so
     // keep whichever timestamp is newer rather than blindly overwriting.
     api.getSettings("auto_update_last_run_at").then((v) => {
@@ -432,25 +433,9 @@ export function Settings() {
     await api.setSettings("auto_update_check_interval", value);
   };
 
-  const handleAutoUpdateCheckNow = async () => {
-    setAutoUpdateChecking(true);
-    try {
-      await api.checkAllSkillUpdates(true);
-      const now = new Date().toISOString();
-      // Record the run so the background scheduler treats this as the most
-      // recent check and waits a full interval before its next round.
-      await api.setSettings("auto_update_last_run_at", now);
-      setAutoUpdateLastRun(now);
-      // Refresh the shared skill list so the My Skills badge and the
-      // notification toast pick up newly-discovered updates immediately,
-      // not just on the next route change.
-      await refreshManagedSkills();
-      toast.success(t("settings.autoUpdate.checkDone"));
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      setAutoUpdateChecking(false);
-    }
+  const handleAutoUpdateApplyChange = async (value: string) => {
+    setAutoUpdateApply(value);
+    await api.setSettings("auto_update_apply", value);
   };
 
   // Keep the last-run timestamp in sync with the background scheduler so
@@ -1512,44 +1497,48 @@ export function Settings() {
             {t("settings.autoUpdate.title")}
           </h2>
           <div className="app-panel overflow-hidden divide-y divide-border-subtle">
-            <div className="px-4 py-3">
-              <h3 className="text-[13px] text-secondary font-medium mb-0.5">
-                {t("settings.autoUpdate.intervalLabel")}
-              </h3>
-              <p className="text-[13px] text-muted mb-2">
-                {t("settings.autoUpdate.intervalDesc")}
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={autoUpdateInterval}
-                  onChange={(e) => handleAutoUpdateIntervalChange(e.target.value)}
-                  className={`${fieldClass} max-w-xs`}
-                >
-                  <option value="off">{t("settings.autoUpdate.intervalOff")}</option>
-                  <option value="6h">{t("settings.autoUpdate.interval6h")}</option>
-                  <option value="24h">{t("settings.autoUpdate.interval24h")}</option>
-                  <option value="7d">{t("settings.autoUpdate.interval7d")}</option>
-                </select>
-                <button
-                  onClick={handleAutoUpdateCheckNow}
-                  disabled={autoUpdateChecking}
-                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
-                >
-                  {autoUpdateChecking ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-3 h-3" />
-                  )}
-                  {t("settings.autoUpdate.checkNow")}
-                </button>
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <div className="min-w-0">
+                <h3 className="text-[13px] text-secondary font-medium">
+                  {t("settings.autoUpdate.intervalLabel")}
+                </h3>
+                <p className="text-[12px] text-muted">
+                  {t("settings.autoUpdate.intervalDesc")}
+                  {autoUpdateLastRun
+                    ? ` · ${t("settings.autoUpdate.lastRun", {
+                        time: new Date(autoUpdateLastRun).toLocaleString(),
+                      })}`
+                    : ""}
+                </p>
               </div>
-              <p className="mt-2 text-[12px] text-muted">
-                {autoUpdateLastRun
-                  ? t("settings.autoUpdate.lastRun", {
-                      time: new Date(autoUpdateLastRun).toLocaleString(),
-                    })
-                  : t("settings.autoUpdate.lastRunNever")}
-              </p>
+              <select
+                value={autoUpdateInterval}
+                onChange={(e) => handleAutoUpdateIntervalChange(e.target.value)}
+                className={`${fieldClass} shrink-0`}
+              >
+                <option value="off">{t("settings.autoUpdate.intervalOff")}</option>
+                <option value="1h">{t("settings.autoUpdate.interval1h")}</option>
+                <option value="6h">{t("settings.autoUpdate.interval6h")}</option>
+                <option value="24h">{t("settings.autoUpdate.interval24h")}</option>
+              </select>
+            </div>
+            <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+              <div className="min-w-0">
+                <h3 className="text-[13px] text-secondary font-medium">
+                  {t("settings.autoUpdate.applyLabel")}
+                </h3>
+                <p className="text-[12px] text-muted">
+                  {t("settings.autoUpdate.applyDesc")}
+                </p>
+              </div>
+              <select
+                value={autoUpdateApply}
+                onChange={(e) => handleAutoUpdateApplyChange(e.target.value)}
+                className={`${fieldClass} shrink-0`}
+              >
+                <option value="off">{t("settings.autoUpdate.applyOff")}</option>
+                <option value="on">{t("settings.autoUpdate.applyOn")}</option>
+              </select>
             </div>
           </div>
         </section>

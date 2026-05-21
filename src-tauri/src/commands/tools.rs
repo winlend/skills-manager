@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::core::error::AppError;
 use crate::core::scenario_service;
@@ -88,14 +88,21 @@ pub async fn get_tool_status(
     .await?
 }
 
+fn refresh_tray_menu_best_effort(app: &AppHandle) {
+    if let Err(err) = crate::refresh_tray_menu(app) {
+        log::warn!("Failed to refresh tray menu after tool mutation: {err}");
+    }
+}
+
 #[tauri::command]
 pub async fn set_tool_enabled(
+    app: AppHandle,
     key: String,
     enabled: bool,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let mut disabled = get_disabled_tools(&store);
         if enabled {
             disabled.retain(|k| k != &key);
@@ -110,16 +117,21 @@ pub async fn set_tool_enabled(
             set_disabled_tools(&store, &disabled)
         }
     })
-    .await?
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn set_all_tools_enabled(
+    app: AppHandle,
     enabled: bool,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         if enabled {
             set_disabled_tools(&store, &[])?;
             // Re-sync active scenario skills to all (now-enabled) installed tools
@@ -136,7 +148,11 @@ pub async fn set_all_tools_enabled(
             set_disabled_tools(&store, &all_keys)
         }
     })
-    .await?
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
 }
 
 #[tauri::command]

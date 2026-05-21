@@ -1,5 +1,4 @@
-use serde::Serialize;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -7,9 +6,9 @@ use tauri::State;
 
 use crate::core::{
     error::AppError,
-    scenario_service,
+    scenario_service::{self, BatchApplyMode},
     skill_store::{ScenarioRecord, SkillStore},
-    sync_engine, sync_metadata,
+    sync_metadata, tool_adapters,
     timing::should_log_first_or_slow,
 };
 
@@ -239,8 +238,9 @@ pub async fn apply_preset_to_default(
     apply_preset_to_default_impl(app, id, store.inner().clone()).await
 }
 
-/// Legacy command kept for the tray menu and backward compatibility. Frontend
-/// callers should use [`apply_preset_to_default`] instead.
+/// Legacy command kept for the CLI and backward compatibility. New callers
+/// should use [`apply_preset_to_default`] (or [`apply_preset_to_coding_agents`]
+/// for the workspace-scoped variant the tray now uses).
 #[tauri::command]
 pub async fn switch_preset(
     app: tauri::AppHandle,
@@ -279,9 +279,11 @@ pub async fn add_skill_to_preset(
             sync_metadata::write_all_from_db_unlocked(&store)
         })
         .map_err(AppError::db)?;
-
-        sync_skill_to_active_preset(&store, &preset_id, &skill_id)?;
-
+        // Membership-only edit. We intentionally do NOT sync to disk here,
+        // even when this preset happens to be the legacy `active_scenario_id`,
+        // because in the post-v1.16 model presets are curation labels, not
+        // implicit deployment switches. Users apply presets explicitly via
+        // PresetBar / the tray, which is where the actual write happens.
         Ok(())
     })
     .await?;
@@ -305,26 +307,10 @@ pub async fn remove_skill_from_preset(
             sync_metadata::write_all_from_db_unlocked(&store)
         })
         .map_err(AppError::db)?;
-
-        // If this is the active preset, unsync the skill.
-        if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-            if active_id == preset_id {
-                let targets = store.get_targets_for_skill(&skill_id).unwrap_or_default();
-                for target in &targets {
-                    let path = PathBuf::from(&target.target_path);
-                    if let Err(e) = sync_engine::remove_target(&path) {
-                        log::warn!("Failed to remove sync target {}: {e}", path.display());
-                    }
-                    if let Err(e) = store.delete_target(&skill_id, &target.tool) {
-                        log::warn!(
-                            "Failed to delete target record for skill {skill_id}, tool {}: {e}",
-                            target.tool
-                        );
-                    }
-                }
-            }
-        }
-
+        // Same rationale as add_skill_to_preset: editing preset membership
+        // never wipes on-disk skill targets. To remove a skill from a coding
+        // agent the caller goes through PresetBar / the tray (or the explicit
+        // per-skill unsync command).
         Ok(())
     })
     .await?;
@@ -399,6 +385,61 @@ pub(crate) fn unsync_scenario_skills(
     scenario_service::unsync_scenario_skills(store, scenario_id)
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresetApplyMode {
+    Add,
+    Remove,
+}
+
+impl From<PresetApplyMode> for BatchApplyMode {
+    fn from(value: PresetApplyMode) -> Self {
+        match value {
+            PresetApplyMode::Add => BatchApplyMode::Add,
+            PresetApplyMode::Remove => BatchApplyMode::Remove,
+        }
+    }
+}
+
+/// Apply (or remove) every skill in `preset_id` against every enabled coding
+/// agent (`ToolCategory::Coding`). Mirrors the PresetBar behavior in the
+/// global workspace view but covers all enabled coding agents at once.
+///
+/// Lobster agents are intentionally excluded — they have their own workspace
+/// and their own preset bar.
+#[tauri::command]
+pub async fn apply_preset_to_coding_agents(
+    app: tauri::AppHandle,
+    preset_id: String,
+    mode: PresetApplyMode,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    let store = store.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        scenario_service::ensure_scenario_exists(&store, &preset_id)?;
+        let skill_ids = store
+            .get_skill_ids_for_scenario(&preset_id)
+            .map_err(AppError::db)?;
+        if skill_ids.is_empty() {
+            return Ok(());
+        }
+        let tool_keys: Vec<String> = tool_adapters::enabled_installed_adapters(&store)
+            .into_iter()
+            .filter(|adapter| matches!(adapter.category, tool_adapters::ToolCategory::Coding))
+            .map(|adapter| adapter.key)
+            .collect();
+        if tool_keys.is_empty() {
+            return Ok(());
+        }
+        scenario_service::apply_skills_to_tools(&store, &skill_ids, &tool_keys, mode.into())
+    })
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +448,7 @@ mod tests {
     };
     use crate::core::skill_store::SkillRecord;
     use crate::core::tool_adapters::{self, CustomToolDef};
+    use std::path::PathBuf;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;

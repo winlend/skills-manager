@@ -5,12 +5,13 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::commands::skills::check_skill_update_internal;
+use crate::commands::skills::{check_skill_update_internal, update_git_skill_internal};
 use crate::core::repo_lock::RepoLock;
 use crate::core::skill_store::SkillStore;
 
 const SETTING_INTERVAL: &str = "auto_update_check_interval";
 const SETTING_LAST_RUN: &str = "auto_update_last_run_at";
+const SETTING_APPLY: &str = "auto_update_apply";
 const EVENT_AUTO_UPDATED: &str = "skills-auto-updated";
 
 /// Initial delay before the first scheduler tick. Gives the app a chance to
@@ -18,10 +19,11 @@ const EVENT_AUTO_UPDATED: &str = "skills-auto-updated";
 /// starts hitting the network / git.
 const INITIAL_DELAY: Duration = Duration::from_secs(60);
 
-/// Polling cadence — we wake at most once per hour to re-read settings and
-/// decide whether a round is due. Also the cadence while auto-update is
-/// disabled, so toggling the setting takes effect within an hour.
-const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// Polling cadence — we wake every 15 minutes to re-read settings and decide
+/// whether a round is due. Kept well below the shortest (1h) interval so an
+/// "hourly" setting is honoured reasonably promptly; also the cadence at which
+/// a changed interval setting takes effect.
+const POLL_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Serialize, Clone)]
 struct AutoUpdatePayload {
@@ -55,9 +57,9 @@ fn read_interval(store: &SkillStore) -> Option<Duration> {
 fn parse_interval(raw: &str) -> Option<Duration> {
     match raw.to_ascii_lowercase().as_str() {
         "" | "off" | "manual" | "disabled" => None,
+        "1h" | "hourly" => Some(Duration::from_secs(60 * 60)),
         "6h" => Some(Duration::from_secs(6 * 60 * 60)),
         "24h" | "1d" | "daily" => Some(Duration::from_secs(24 * 60 * 60)),
-        "7d" | "weekly" => Some(Duration::from_secs(7 * 24 * 60 * 60)),
         _ => None,
     }
 }
@@ -105,11 +107,24 @@ async fn run_round<R: Runtime>(app: &AppHandle<R>, store: &Arc<SkillStore>) -> R
     if let Err(err) = app.emit(EVENT_AUTO_UPDATED, payload) {
         log::debug!("skill auto-updater: emit failed: {err}");
     }
+    if let Err(err) = crate::refresh_tray_menu(app) {
+        log::debug!("skill auto-updater: refresh_tray_menu failed: {err}");
+    }
     Ok(())
+}
+
+/// Whether the user has opted in to applying updates automatically (vs. only
+/// checking and surfacing the badge).
+fn apply_enabled(store: &SkillStore) -> bool {
+    matches!(
+        store.get_setting(SETTING_APPLY).ok().flatten().as_deref(),
+        Some("on")
+    )
 }
 
 fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     let proxy = store.proxy_url();
+    let apply = apply_enabled(store);
     let ids: Vec<String> = store
         .get_all_skills()
         .map_err(|err| format!("get_all_skills failed: {err}"))?
@@ -122,28 +137,52 @@ fn run_round_blocking(store: &SkillStore) -> Result<(), String> {
     // operation to a single skill's network round-trip (rather than the
     // entire round). A skill whose lock is busy — a manual install/update is
     // running — is simply skipped; the next scheduled round picks it up.
-    let (mut checked, mut available, mut failed) = (0usize, 0usize, 0usize);
+    let (mut checked, mut available, mut updated, mut failed) =
+        (0usize, 0usize, 0usize, 0usize);
     for skill_id in ids {
         checked += 1;
-        let _lock = match RepoLock::acquire("auto-update check") {
-            Ok(lock) => lock,
-            Err(_) => {
-                failed += 1;
-                log::info!("skill auto-updater: skipping {skill_id} (repo busy)");
-                continue;
+
+        // The check holds the repo lock; it must be released before applying,
+        // because update_git_skill_internal acquires the lock itself.
+        let status = {
+            let _lock = match RepoLock::acquire("auto-update check") {
+                Ok(lock) => lock,
+                Err(_) => {
+                    failed += 1;
+                    log::info!("skill auto-updater: skipping {skill_id} (repo busy)");
+                    continue;
+                }
+            };
+            match check_skill_update_internal(store, &skill_id, true, proxy.as_deref()) {
+                Ok(dto) => dto.update_status,
+                Err(err) => {
+                    failed += 1;
+                    log::warn!("skill auto-updater: check failed for {skill_id}: {err}");
+                    continue;
+                }
             }
         };
-        match check_skill_update_internal(store, &skill_id, true, proxy.as_deref()) {
-            Ok(dto) if dto.update_status == "update_available" => available += 1,
-            Ok(_) => {}
-            Err(err) => {
-                failed += 1;
-                log::warn!("skill auto-updater: check failed for {skill_id}: {err}");
+
+        if status != "update_available" {
+            continue;
+        }
+        available += 1;
+
+        if apply {
+            match update_git_skill_internal(store, &skill_id, proxy.as_deref(), None) {
+                Ok(_) => updated += 1,
+                Err(err) => {
+                    failed += 1;
+                    log::warn!(
+                        "skill auto-updater: update failed for {skill_id}: {}",
+                        err.message
+                    );
+                }
             }
         }
     }
     log::info!(
-        "skill auto-updater: round done — checked={checked} available={available} failed={failed}"
+        "skill auto-updater: round done — checked={checked} available={available} updated={updated} failed={failed}"
     );
     Ok(())
 }
@@ -156,11 +195,12 @@ mod tests {
     fn parse_interval_known_values() {
         assert_eq!(parse_interval("off"), None);
         assert_eq!(parse_interval(""), None);
+        assert_eq!(parse_interval("1h"), Some(Duration::from_secs(3600)));
+        assert_eq!(parse_interval("hourly"), Some(Duration::from_secs(3600)));
         assert_eq!(parse_interval("6h"), Some(Duration::from_secs(6 * 3600)));
         assert_eq!(parse_interval("24h"), Some(Duration::from_secs(86_400)));
         assert_eq!(parse_interval("daily"), Some(Duration::from_secs(86_400)));
-        assert_eq!(parse_interval("7d"), Some(Duration::from_secs(7 * 86_400)));
-        assert_eq!(parse_interval("weekly"), Some(Duration::from_secs(7 * 86_400)));
+        assert_eq!(parse_interval("7d"), None);
         assert_eq!(parse_interval("nonsense"), None);
     }
 

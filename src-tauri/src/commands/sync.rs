@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::core::{
     error::AppError,
@@ -24,6 +24,14 @@ fn disabled_tools(store: &SkillStore) -> Vec<String> {
     tool_service::get_disabled_tools(store)
 }
 
+/// Sync commands fire one call per `(skill, agent)` pair when PresetBar
+/// applies a preset from the in-app workspace view. Route through the
+/// coalescing refresh so a burst rebuilds the tray at most once per window
+/// instead of once per row.
+fn schedule_tray_refresh(app: &AppHandle) {
+    crate::schedule_tray_refresh(app);
+}
+
 fn sync_skill_to_tool_internal(
     store: &SkillStore,
     skill_id: &str,
@@ -34,12 +42,13 @@ fn sync_skill_to_tool_internal(
 
 #[tauri::command]
 pub async fn sync_skill_to_tool(
+    app: AppHandle,
     skill_id: String,
     tool: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let outcome = (|| -> Result<(), AppError> {
             sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
 
@@ -67,17 +76,22 @@ pub async fn sync_skill_to_tool(
         log_sync_outcome(&store, "enable", &skill_id, &tool, outcome.as_ref());
         outcome
     })
-    .await?
+    .await?;
+    if result.is_ok() {
+        schedule_tray_refresh(&app);
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn unsync_skill_from_tool(
+    app: AppHandle,
     skill_id: String,
     tool: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let outcome = (|| -> Result<(), AppError> {
             let targets = store
                 .get_targets_for_skill(&skill_id)
@@ -116,7 +130,11 @@ pub async fn unsync_skill_from_tool(
         log_sync_outcome(&store, "disable", &skill_id, &tool, outcome.as_ref());
         outcome
     })
-    .await?
+    .await?;
+    if result.is_ok() {
+        schedule_tray_refresh(&app);
+    }
+    result
 }
 
 fn log_sync_outcome(
@@ -201,6 +219,7 @@ pub async fn get_skill_tool_toggles(
 
 #[tauri::command]
 pub async fn set_skill_tool_toggle(
+    app: AppHandle,
     skill_id: String,
     preset_id: String,
     tool: String,
@@ -208,7 +227,7 @@ pub async fn set_skill_tool_toggle(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let skill_ids = store
             .get_skill_ids_for_scenario(&preset_id)
             .map_err(AppError::db)?;
@@ -266,7 +285,11 @@ pub async fn set_skill_tool_toggle(
 
         Ok(())
     })
-    .await?
+    .await?;
+    if result.is_ok() {
+        schedule_tray_refresh(&app);
+    }
+    result
 }
 
 #[cfg(test)]

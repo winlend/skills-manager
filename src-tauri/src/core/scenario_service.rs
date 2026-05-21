@@ -567,6 +567,196 @@ pub fn sync_single_skill_to_tool(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BatchApplyMode {
+    Add,
+    Remove,
+}
+
+/// Apply a batch of `(skill_id × tool_key)` pairs in either Add or Remove mode
+/// without touching `active_scenario_id` or `scenario_skill_tools` toggles.
+///
+/// This is the tray-side preset apply primitive. Unlike [`sync_single_skill_to_tool`]
+/// (which is wrapped by the `sync_skill_to_tool` Tauri command and carries the
+/// implicit active-preset toggle side-effect), this batch is a pure
+/// "write/remove files + maintain `skill_targets` rows" operation.
+///
+/// Remove mode handles shared physical paths: a `target_path` may be referenced
+/// by multiple `(skill_id, tool)` records when several tools resolve to the same
+/// skills directory. The filesystem path is only removed when no remaining
+/// `skill_targets` row references it after the batch deletions, so removing one
+/// preset's tools never wipes another tool's still-active files.
+pub fn apply_skills_to_tools(
+    store: &SkillStore,
+    skill_ids: &[String],
+    tool_keys: &[String],
+    mode: BatchApplyMode,
+) -> Result<(), AppError> {
+    if skill_ids.is_empty() || tool_keys.is_empty() {
+        return Ok(());
+    }
+
+    match mode {
+        BatchApplyMode::Add => apply_add(store, skill_ids, tool_keys),
+        BatchApplyMode::Remove => apply_remove(store, skill_ids, tool_keys),
+    }
+}
+
+fn apply_add(
+    store: &SkillStore,
+    skill_ids: &[String],
+    tool_keys: &[String],
+) -> Result<(), AppError> {
+    let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
+    let disabled = tool_service::get_disabled_tools(store);
+
+    let mut adapters: HashMap<String, tool_adapters::ToolAdapter> = HashMap::new();
+    for key in tool_keys {
+        if disabled.contains(key) {
+            log::debug!("apply_skills_to_tools: skipping disabled tool {key}");
+            continue;
+        }
+        let Some(adapter) = tool_adapters::find_adapter_with_store(store, key) else {
+            log::warn!("apply_skills_to_tools: unknown tool {key}");
+            continue;
+        };
+        if !adapter.is_installed() {
+            log::debug!(
+                "apply_skills_to_tools: skipping uninstalled tool {} ({key})",
+                adapter.display_name
+            );
+            continue;
+        }
+        adapters.insert(key.clone(), adapter);
+    }
+
+    let mut synced = 0usize;
+    let mut failed = 0usize;
+    for skill_id in skill_ids {
+        let Ok(Some(skill)) = store.get_skill_by_id(skill_id) else {
+            log::warn!("apply_skills_to_tools: skill {skill_id} not found");
+            continue;
+        };
+        let source = PathBuf::from(&skill.central_path);
+        let target_name = sync_engine::target_dir_name(&source, &skill.name);
+        for (tool_key, adapter) in &adapters {
+            let target = adapter.skills_dir().join(&target_name);
+            let mode = sync_engine::sync_mode_for_tool(tool_key, configured_mode.as_deref());
+            match sync_engine::sync_skill(&source, &target, mode) {
+                Ok(actual_mode) => {
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let target_record = SkillTargetRecord {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        skill_id: skill_id.clone(),
+                        tool: tool_key.clone(),
+                        target_path: target.to_string_lossy().to_string(),
+                        mode: actual_mode.as_str().to_string(),
+                        status: "ok".to_string(),
+                        synced_at: Some(now),
+                        last_error: None,
+                        source_hash: skill.content_hash.clone(),
+                    };
+                    if let Err(e) = store.insert_target(&target_record) {
+                        log::warn!(
+                            "apply_skills_to_tools: failed to insert target for skill {skill_id} / {tool_key}: {e}"
+                        );
+                        failed += 1;
+                    } else {
+                        synced += 1;
+                    }
+                }
+                Err(e) => {
+                    failed += 1;
+                    log::warn!(
+                        "apply_skills_to_tools: failed to sync skill {skill_id} ({}) to {}: {e}",
+                        skill.name,
+                        target.display()
+                    );
+                }
+            }
+        }
+    }
+
+    log::info!(
+        "apply_skills_to_tools(Add): skills={} tools={} synced={synced} failed={failed}",
+        skill_ids.len(),
+        adapters.len(),
+    );
+    Ok(())
+}
+
+fn apply_remove(
+    store: &SkillStore,
+    skill_ids: &[String],
+    tool_keys: &[String],
+) -> Result<(), AppError> {
+    let tool_set: HashSet<&String> = tool_keys.iter().collect();
+
+    let mut to_delete: Vec<(String, String, PathBuf)> = Vec::new();
+    for skill_id in skill_ids {
+        let targets = store.get_targets_for_skill(skill_id).unwrap_or_default();
+        for target in targets {
+            if tool_set.contains(&target.tool) {
+                to_delete.push((
+                    skill_id.clone(),
+                    target.tool.clone(),
+                    PathBuf::from(&target.target_path),
+                ));
+            }
+        }
+    }
+
+    if to_delete.is_empty() {
+        return Ok(());
+    }
+
+    // Phase 1: drop the DB rows first so the post-delete recount below sees
+    // the new ground truth when deciding which filesystem paths to keep.
+    for (skill_id, tool, _) in &to_delete {
+        if let Err(e) = store.delete_target(skill_id, tool) {
+            log::warn!(
+                "apply_skills_to_tools(Remove): failed to delete target record for skill {skill_id} / {tool}: {e}"
+            );
+        }
+    }
+
+    // Phase 2: gather the paths the batch wanted to remove, then keep any path
+    // a remaining (skill_id, tool) row still points at. This prevents wiping a
+    // directory another adapter is sharing.
+    let candidate_paths: HashSet<PathBuf> = to_delete.iter().map(|(_, _, p)| p.clone()).collect();
+    let still_referenced: HashSet<PathBuf> = store
+        .get_all_targets()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| PathBuf::from(&t.target_path))
+        .collect();
+
+    let mut removed = 0usize;
+    for path in candidate_paths {
+        if still_referenced.contains(&path) {
+            log::debug!(
+                "apply_skills_to_tools(Remove): keeping {} (still referenced by another target)",
+                path.display()
+            );
+            continue;
+        }
+        if let Err(e) = sync_engine::remove_target(&path) {
+            log::warn!(
+                "apply_skills_to_tools(Remove): failed to remove {}: {e}",
+                path.display()
+            );
+        } else {
+            removed += 1;
+        }
+    }
+
+    log::info!(
+        "apply_skills_to_tools(Remove): pairs={} fs_removed={removed}",
+        to_delete.len(),
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod sync_desired_targets_tests {
     use super::*;

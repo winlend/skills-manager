@@ -78,7 +78,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (previousActiveId !== nextActiveId) {
         lastActivePresetIdRef.current = nextActiveId;
         // Carry the sidebar along only when the user was viewing the old
-        // active preset — that way an external switch (CLI/tray) follows,
+        // active preset — that way an external switch (e.g. CLI) follows,
         // but a user who's browsing some other preset isn't yanked away.
         // Skip the initial load (previousActiveId === null) entirely so a
         // persisted viewedPreset from localStorage isn't clobbered.
@@ -199,18 +199,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refreshAppData]);
 
   useEffect(() => {
-    const unlistenPromise = listen<string>("tray-preset-switched", async () => {
-      await Promise.all([refreshPresets(), refreshManagedSkills()]);
+    const unlistenPromise = listen("tray-open-updates", () => {
+      setDetailSkillId(null);
+      if (!window.location.pathname.endsWith("/my-skills")) {
+        window.history.pushState(null, "", "/my-skills");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }
     });
 
     return () => {
       unlistenPromise
         .then((unlisten) => unlisten())
         .catch((error) => {
-          console.error("Failed to unlisten tray-preset-switched:", error);
+          console.error("Failed to unlisten tray-open-updates:", error);
         });
     };
-  }, [refreshManagedSkills, refreshPresets]);
+  }, []);
 
   useEffect(() => {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -276,7 +280,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-check skill updates on startup (non-blocking, silent)
+  // Check skill updates on startup (non-blocking, silent). When the user has
+  // opted in via the Settings toggle, also apply any available updates.
   useEffect(() => {
     if (loading || managedSkills.length === 0) return;
     const hasGitSkills = managedSkills.some(
@@ -287,27 +292,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // Delay to avoid slowing down initial render
     const timer = setTimeout(() => {
       autoCheckInFlightRef.current = true;
-      api.checkAllSkillUpdates(false)
-        .then(async () => {
-          const skills = await api.getManagedSkills();
+      (async () => {
+        try {
+          await api.checkAllSkillUpdates(false);
+          let skills = await api.getManagedSkills();
+
+          const autoUpdate = await api
+            .getSettings("auto_update_apply")
+            .catch(() => null);
+          if (autoUpdate === "on") {
+            const ids = skills
+              .filter(
+                (s) =>
+                  s.update_status === "update_available" &&
+                  (s.source_type === "git" || s.source_type === "skillssh")
+              )
+              .map((s) => s.id);
+            if (ids.length > 0) {
+              const result = await api.batchUpdateSkills(ids);
+              skills = await api.getManagedSkills();
+              if (result.refreshed > 0) {
+                toast.success(
+                  i18n.t("mySkills.autoUpdated", { count: result.refreshed })
+                );
+              }
+              if (result.failed.length > 0) {
+                console.warn("Auto-update failures:", result.failed);
+                toast.error(
+                  i18n.t("mySkills.autoUpdateFailed", {
+                    count: result.failed.length,
+                  })
+                );
+              }
+            }
+          }
+
           setManagedSkills(skills);
           notifyUpdatableSkills(skills);
-          // Treat the startup check as an auto-update round so the backend
-          // scheduler doesn't immediately re-run the same checks (and
-          // potentially race on the same `update_status` writes).
           api.setSettings("auto_update_last_run_at", new Date().toISOString())
             .catch(() => {});
-        })
-        .catch(() => {}) // silent failure
-        .finally(() => {
+        } catch (err) {
+          // Startup round is non-blocking and does not toast on failure, but
+          // log so a broken check/update is still diagnosable.
+          console.error("Startup skill update round failed:", err);
+        } finally {
           autoCheckInFlightRef.current = false;
-        });
+        }
+      })();
     }, 3000);
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
-  // Listen for background auto-update rounds emitted by the Rust scheduler.
+  // Refresh after a background auto-update round (Rust scheduler) or the
+  // tray "check for updates" action finishes.
   useEffect(() => {
     const unlistenPromise = listen("skills-auto-updated", async () => {
       try {
