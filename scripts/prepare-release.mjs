@@ -74,8 +74,8 @@ function ensureChangelogEntry(changelog, nextVersion, { zh = false } = {}) {
   }
 
   const sections = zh
-    ? ['### 新增', '- ', '', '### 变更', '- ', '', '### 修复', '- ', '', '### 移除', '- ']
-    : ['### Added', '- ', '', '### Changed', '- ', '', '### Fixed', '- ', '', '### Removed', '- '];
+    ? ['### 发布概览', '- ', '', '### 用户可见更新', '- ', '', '### 开发者与治理更新', '- ']
+    : ['### Release Overview', '- ', '', '### User-facing', '- ', '', '### Developer & Governance', '- '];
 
   const entry = [heading, '', ...sections, ''].join('\n');
 
