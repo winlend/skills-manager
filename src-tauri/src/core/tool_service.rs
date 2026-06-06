@@ -33,6 +33,7 @@ pub fn get_disabled_tools(store: &SkillStore) -> Vec<String> {
 const DEFAULT_PRIORITY_ORDER: &[&str] = &[
     "claude_code",
     "codex",
+    "grok",
     "gemini_cli",
     "cursor",
     "opencode",

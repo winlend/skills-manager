@@ -107,7 +107,7 @@ Each successful sync creates a snapshot version tag. You can open **Version Hist
 
 ## Supported Tools
 
-Cursor · Claude Code · Codex · OpenCode · Amp · Kilo Code · Roo Code · Goose · Gemini CLI · GitHub Copilot · Windsurf · TRAE IDE · Antigravity · Clawdbot · Droid
+Cursor · Claude Code · Codex · Grok · OpenCode · Amp · Kilo Code · Roo Code · Goose · Gemini CLI · GitHub Copilot · Windsurf · TRAE IDE · Antigravity · Clawdbot · Droid
 
 You can also add custom tools in **Settings** and manage their skills the same way.
 

@@ -67,6 +67,7 @@ const MAINSTREAM_AGENT_KEYS = new Set([
   "claude_code",
   "cursor",
   "codex",
+  "grok",
   "gemini_cli",
   "github_copilot",
   "opencode",

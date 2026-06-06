@@ -19,6 +19,7 @@ const AGENT_ICON_FILES: Record<string, string> = {
   gemini_cli: "gemini_cli.svg",
   github_copilot: "github_copilot.png",
   goose: "goose.png",
+  grok: "grok.svg",
   hermes: "hermes.png",
   iflow: "iflow.png",
   junie: "junie.png",

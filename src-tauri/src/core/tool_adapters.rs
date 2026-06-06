@@ -194,6 +194,21 @@ pub fn default_tool_adapters() -> Vec<ToolAdapter> {
             project_relative_skills_dir: None,
         },
         ToolAdapter {
+            // Grok reads user-level skills from `~/.grok/skills/` and
+            // project-level skills from `<repo>/.grok/skills/`.
+            // See https://docs.x.ai/build/features/skills-plugins-marketplaces
+            key: "grok".into(),
+            display_name: "Grok".into(),
+            relative_skills_dir: ".grok/skills".into(),
+            relative_detect_dir: ".grok".into(),
+            additional_scan_dirs: vec![],
+            override_skills_dir: None,
+            category: ToolCategory::Coding,
+            is_custom: false,
+            recursive_scan: false,
+            project_relative_skills_dir: None,
+        },
+        ToolAdapter {
             key: "opencode".into(),
             display_name: "OpenCode".into(),
             relative_skills_dir: ".config/opencode/skills".into(),
