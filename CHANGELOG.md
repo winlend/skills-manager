@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-06-06
+
+### Release Overview
+- A release centered on cleaner skill/preset boundaries: installing a skill now only adds it to the central library instead of silently joining the active preset, and preset exports and agent ordering respect which agents are actually enabled. Also adds Grok as a built-in agent.
+
+### User-facing
+- **Grok is now a built-in agent** — Grok ships out of the box with skill paths at `~/.grok/skills` and `<repo>/.grok/skills`, slotted right after Codex in the default order and the Settings agent group, with its own icon.
+- **Installing a skill no longer auto-adds it to the active preset** — Installs now only add the skill to the central library. Previously each install was silently added to whichever preset was active and synced to your agents; because the active preset drifts (creating a preset auto-activates it, deleting the active one picks a replacement, startup restores the default), skills leaked into unintended presets and had to be removed by hand. To enable an installed skill, add it to a preset (or install it to an agent) explicitly — matching the CLI, which already behaved this way (#213).
+- **Preset exports target only enabled agents** — Exporting a preset to a project now writes to agents that are both installed and enabled, instead of also touching disabled ones, so a disabled agent no longer receives preset skills (#206).
+- **Newly added agents keep their canonical order** — For users who already have a saved agent order, a newly registered priority agent (such as Grok) is now inserted right after its predecessor in the default order instead of being appended at the bottom.
+
+### Developer & Governance
+- All five desktop install paths now pass `None` to `store_installed_skill_unlocked` instead of the active scenario, and the batch-import "already exists" branch no longer re-adds skills to the active preset; the function's `Option` parameter is retained for the CLI's `--sync` / `--sync-preset` (#213, #214).
+- Collapsed the duplicated `installed && enabled` agent-filter predicate (`getDefaultExportAgents`, `initialSheetAgents`, `presetBarAgentKeys`) into a single `enabledInstalledAgentKeys()` helper so the availability rule cannot drift between call sites (#206).
+- `merge_order` now inserts a new priority agent right after its predecessor in `DEFAULT_PRIORITY_ORDER` (non-priority agents still append), with unit tests for fresh install, new-priority insertion, and non-priority append.
+- Added video intro links (YouTube + Bilibili) to the README.
 ## [1.22.5] - 2026-06-01
 
 ### Release Overview

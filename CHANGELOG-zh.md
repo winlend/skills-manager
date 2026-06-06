@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.23.0] - 2026-06-06
+
+### 发布概览
+- 本版聚焦更清晰的「技能 / Preset」边界：安装技能现在只加入中央库，不再悄悄并入当前 active preset；Preset 导出与 agent 排序也会尊重「实际启用的 agent」。同时新增 Grok 内置 agent。
+
+### 用户可见更新
+- **新增 Grok 内置 agent** —— Grok 现已开箱内置，技能路径为 `~/.grok/skills` 与 `<repo>/.grok/skills`，在默认顺序和设置页 agent 分组中紧随 Codex，并配有独立图标。
+- **安装技能不再自动加入当前 Preset** —— 安装现在只把技能加入中央库。此前每次安装都会被悄悄加入当前 active preset 并同步到各 agent；而 active preset 会漂移（新建 preset 自动激活、删除当前自动选替补、启动恢复默认），导致技能误进不该进的 preset，需手动逐个移除。要让已安装技能生效，请显式将其加入某个 preset（或安装到对应 agent）—— 与命令行版本行为一致（#213）。
+- **Preset 导出只面向已启用的 agent** —— 将 Preset 导出到项目时，现在只写入「已安装且已启用」的 agent，不再波及被禁用的 agent，禁用的 agent 不会再收到 Preset 技能（#206）。
+- **新增 agent 保持规范排序** —— 对已保存过 agent 顺序的用户，新注册的优先级 agent（如 Grok）现在会插入到默认顺序中其前序 agent 之后，而不是被追加到末尾。
+
+### 开发者与治理更新
+- 五条桌面安装路径现在向 `store_installed_skill_unlocked` 传 `None` 而非 active scenario，批量导入「已存在」分支不再把技能重新加入 active preset；该函数的 `Option` 参数保留给 CLI 的 `--sync` / `--sync-preset`（#213、#214）。
+- 将重复的「installed && enabled」agent 过滤判断（`getDefaultExportAgents`、`initialSheetAgents`、`presetBarAgentKeys`）合并为单一的 `enabledInstalledAgentKeys()` 辅助函数，避免各调用点的可用性规则漂移（#206）。
+- `merge_order` 现在会把新的优先级 agent 插入到 `DEFAULT_PRIORITY_ORDER` 中其前序之后（非优先级 agent 仍追加到末尾），并补充了全新安装、新优先级插入、非优先级追加的单元测试。
+- README 增加视频介绍链接（YouTube + Bilibili）。
 ## [1.22.5] - 2026-06-01
 
 ### 发布概览
