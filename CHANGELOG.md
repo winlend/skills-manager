@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-06-18
+
+### Release Overview
+- A new built-in agent: OMP Agent (oh-my-pi) now ships out of the box, with skills syncing to oh-my-pi's native user- and project-level skill paths.
+
+### User-facing
+- **OMP Agent (oh-my-pi) is now a built-in agent** — oh-my-pi ships out of the box with its own icon. User-level skills sync to `~/.omp/agent/skills`, and project-level skills to `<repo>/.omp/skills` — matching oh-my-pi's native skill discovery, whose project-scope path drops the `agent` segment. OMP Agent is listed under the "more agents" section in Settings and sits after the mainstream coding agents in the default agent order (#235).
+
+### Developer & Governance
+- Added the `omp_agent` tool adapter with asymmetric default paths (user `~/.omp/agent/skills`, project `<repo>/.omp/skills`) per oh-my-pi's `native` discovery provider; it is placed after `opencode` in `DEFAULT_PRIORITY_ORDER` and excluded from `MAINSTREAM_AGENT_KEYS`. Unit tests cover the adapter's default paths and the new-agent insertion order for existing users.
 ## [1.23.2] - 2026-06-17
 
 ### Release Overview

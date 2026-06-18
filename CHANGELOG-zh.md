@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.24.0] - 2026-06-18
+
+### 发布概览
+- 新增内置 Agent：OMP Agent（oh-my-pi）开箱即用，skill 同步到 oh-my-pi 原生的用户级与项目级 skill 路径。
+
+### 用户可见更新
+- **新增内置 Agent：OMP Agent（oh-my-pi）** —— oh-my-pi 现已开箱即用，并配有专属图标。用户级 skill 同步到 `~/.omp/agent/skills`，项目级 skill 同步到 `<repo>/.omp/skills` —— 与 oh-my-pi 原生的 skill 发现机制一致（其项目级路径不含 `agent` 段）。OMP Agent 在设置中归入「更多 Agent」分组，并在默认 Agent 排序中位于主流编码 Agent 之后（#235）。
+
+### 开发者与治理更新
+- 新增 `omp_agent` 工具适配器，按 oh-my-pi 的 `native` 发现 provider 采用非对称默认路径（用户级 `~/.omp/agent/skills`、项目级 `<repo>/.omp/skills`）；在 `DEFAULT_PRIORITY_ORDER` 中排在 `opencode` 之后，并从 `MAINSTREAM_AGENT_KEYS` 中剔除。新增单元测试覆盖该适配器的默认路径，以及老用户场景下新 Agent 的插入排序。
 ## [1.23.2] - 2026-06-17
 
 ### 发布概览
