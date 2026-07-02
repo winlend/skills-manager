@@ -45,7 +45,7 @@
       },
       "backup": {
         "title": "Git 備份",
-        "description": "先在設定裡儲存遠端倉庫位址，再去「我的 Skills」執行備份或同步。每次成功同步都會建立一個可從版本歷史還原的快照標籤，適合多機同步和版本管理。"
+        "description": "先在設定裡儲存遠端倉庫位址，再去「技能庫」執行備份或同步。每次成功同步都會建立一個可從版本歷史還原的快照標籤，適合多機同步和版本管理。"
       },
       "settings": {
         "title": "設定",
@@ -462,7 +462,7 @@
       "applyOn": "開啟"
     },
     "gitSyncConfig": "Git 同步設定",
-    "gitSyncConfigDesc": "這裡只儲存遠端倉庫位址等偏好；初始化與同步操作請在「我的 Skills」頁面執行。",
+    "gitSyncConfigDesc": "這裡只儲存遠端倉庫位址等偏好；初始化與同步操作請在「技能庫」頁面執行。",
     "gitConfigSaved": "Git 同步設定已儲存",
     "gitStartBackup": "設定備份",
     "gitStartHint": "填寫遠端位址會從遠端複製；留空則初始化本機倉庫。",

@@ -45,7 +45,7 @@
       },
       "backup": {
         "title": "Git Backup",
-        "description": "Configure a remote repository in Settings, then back up or sync from My Skills. Each sync creates a restorable snapshot tag — ideal for multi-machine sync and version tracking."
+        "description": "Configure a remote repository in Settings, then back up or sync from the Library page. Each sync creates a restorable snapshot tag — ideal for multi-machine sync and version tracking."
       },
       "settings": {
         "title": "Settings",
@@ -517,7 +517,7 @@
       "applyOn": "On"
     },
     "gitSyncConfig": "Git Sync Configuration",
-    "gitSyncConfigDesc": "This page stores remote repository preferences only. Initialize and run sync from the My Skills page.",
+    "gitSyncConfigDesc": "This page stores remote repository preferences only. Initialize and run sync from the Library page.",
     "gitConfigSaved": "Git sync configuration saved",
     "gitStartBackup": "Set Up Backup",
     "gitStartHint": "If Remote URL is filled, it will clone from remote; otherwise it initializes a local repository.",

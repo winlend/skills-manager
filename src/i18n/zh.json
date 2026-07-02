@@ -45,7 +45,7 @@
       },
       "backup": {
         "title": "Git 备份",
-        "description": "在设置页配置远程仓库地址，再到「我的 Skills」执行备份或同步。每次同步生成可恢复的快照标签，适合多机同步和版本管理。"
+        "description": "在设置页配置远程仓库地址，再到「技能库」执行备份或同步。每次同步生成可恢复的快照标签，适合多机同步和版本管理。"
       },
       "settings": {
         "title": "设置",
@@ -517,7 +517,7 @@
       "applyOn": "开启"
     },
     "gitSyncConfig": "Git 同步配置",
-    "gitSyncConfigDesc": "这里只保存远程仓库地址等偏好；初始化与同步操作请在“我的 Skills”页面执行。",
+    "gitSyncConfigDesc": "这里只保存远程仓库地址等偏好；初始化与同步操作请在“技能库”页面执行。",
     "gitConfigSaved": "Git 同步配置已保存",
     "gitStartBackup": "设置备份",
     "gitStartHint": "填写远程地址会从远程克隆；留空则初始化本地仓库。",
