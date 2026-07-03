@@ -514,6 +514,8 @@ export interface GitBackupVersion {
   commit: string;
   message: string;
   committed_at: string;
+  /** Device name of the machine that made this backup (empty for old commits). */
+  author: string;
 }
 
 export interface GitBackupSizeReport {
@@ -579,6 +581,13 @@ export const gitBackupMigrateCredentials = () =>
 
 export const gitBackupSizeReport = () =>
   invoke<GitBackupSizeReport>("git_backup_size_report");
+
+/** This machine's device name (§4.3): saved setting or persisted hostname default. */
+export const backupDeviceName = () => invoke<string>("backup_device_name");
+
+/** Rename this device; only affects future backups. Returns the sanitized name. */
+export const backupSetDeviceName = (name: string) =>
+  invoke<string>("backup_set_device_name", { name });
 
 export const gitBackupRemoveRemote = () =>
   invoke<void>("git_backup_remove_remote");

@@ -111,6 +111,11 @@
       "none": "Not connected",
       "unknown": "Unknown"
     },
+    "device": {
+      "label": "This device",
+      "rename": "Rename device",
+      "renamed": "Device renamed. Future backups will be signed with the new name."
+    },
     "github": {
       "title": "Connect with GitHub",
       "desc": "Sign in with GitHub and the private backup repository is set up for you. Your credentials are stored in the system keychain, never in files.",

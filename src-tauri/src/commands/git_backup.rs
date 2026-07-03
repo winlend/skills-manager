@@ -26,6 +26,36 @@ fn sync_engine_pref(store: &SkillStore) {
     git2_engine::set_preference(git2_enabled, store.proxy_url());
 }
 
+/// Resolve the device name (§4.3 设备命名): the persisted setting, or a
+/// hostname-derived default that is persisted on first use so it stays stable
+/// across sessions.
+fn effective_device_name(store: &SkillStore) -> String {
+    let saved = store
+        .get_setting("backup_device_name")
+        .ok()
+        .flatten()
+        .map(|v| git_backup::sanitize_device_name(&v))
+        .filter(|v| !v.is_empty());
+    if let Some(name) = saved {
+        return name;
+    }
+    let name = git_backup::default_device_name();
+    if let Err(e) = store.set_setting("backup_device_name", &name) {
+        log::warn!("device name: failed to persist default: {e:#}");
+    }
+    name
+}
+
+/// Best-effort: bring the repo's commit identity in line with the device name
+/// before an operation that can create commits. Identity trouble must never
+/// block a backup — commits then just carry the previous (or global) author.
+fn apply_device_identity(store: &SkillStore, skills_dir: &Path) {
+    let name = effective_device_name(store);
+    if let Err(e) = git_backup::configure_device_identity(skills_dir, &name) {
+        log::warn!("device name: failed to configure git identity: {e:#}");
+    }
+}
+
 /// RAII guard that clears `FETCH_IN_FLIGHT` on drop. Survives future
 /// cancellation, panic in the blocking task, and early returns — without
 /// it, a dropped command future would strand the flag set forever.
@@ -79,7 +109,7 @@ pub async fn git_backup_init(store: State<'_, Arc<SkillStore>>) -> Result<(), Ap
     tokio::task::spawn_blocking(move || {
         git_backup::with_repo_lock("git init", || {
             sync_metadata::write_all_from_db_unlocked(&store)?;
-            git_backup::init_repo_unlocked(&skills_dir)
+            git_backup::init_repo_unlocked(&skills_dir, &effective_device_name(&store))
         })
         .map_err(AppError::git)
     })
@@ -306,6 +336,7 @@ pub async fn git_backup_commit(
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::with_repo_lock("git commit", || {
+            apply_device_identity(&store, &skills_dir);
             sync_metadata::write_all_from_db_unlocked(&store)?;
             git_backup::commit_all_unlocked(&skills_dir, &message)
         })
@@ -331,6 +362,8 @@ pub async fn git_backup_pull(store: State<'_, Arc<SkillStore>>) -> Result<(), Ap
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::with_repo_lock("git pull", || {
+            // Merge commits must carry this device's identity too.
+            apply_device_identity(&store, &skills_dir);
             git_backup::pull_unlocked(&skills_dir)?;
             reconcile_skills_index_unlocked(&store)
         })
@@ -352,6 +385,7 @@ pub async fn git_backup_clone(
         let effective = sanitize_url_to_keychain(url.trim());
         git_backup::with_repo_lock("git clone", || {
             git_backup::clone_into_unlocked(&skills_dir, &effective)?;
+            apply_device_identity(&store, &skills_dir);
             reconcile_skills_index_unlocked(&store)
         })
         .map_err(AppError::classify_git_error)
@@ -375,6 +409,7 @@ pub async fn git_backup_reclone(
         let effective = sanitize_url_to_keychain(url.trim());
         git_backup::with_repo_lock("git reclone", || {
             git_backup::reclone_from_remote_unlocked(&skills_dir, &effective)?;
+            apply_device_identity(&store, &skills_dir);
             reconcile_skills_index_unlocked(&store)
         })
         .map_err(AppError::classify_git_error)
@@ -419,11 +454,46 @@ pub async fn git_backup_restore_version(
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
         git_backup::with_repo_lock("git restore snapshot", || {
+            // The safety-point and restore commits are made by this device.
+            apply_device_identity(&store, &skills_dir);
             let safety_tag = git_backup::restore_snapshot_version_unlocked(&skills_dir, &tag)?;
             reconcile_skills_index_unlocked(&store)?;
             Ok(safety_tag)
         })
         .map_err(AppError::git)
+    })
+    .await?
+}
+
+/// Effective device name (§4.3 设备命名): the saved setting, or a persisted
+/// hostname-derived default.
+#[tauri::command]
+pub async fn backup_device_name(store: State<'_, Arc<SkillStore>>) -> Result<String, AppError> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || Ok(effective_device_name(&store))).await?
+}
+
+/// Rename this device. Only affects backups made from now on — history keeps
+/// the author it was written with. Returns the sanitized name actually saved.
+#[tauri::command]
+pub async fn backup_set_device_name(
+    store: State<'_, Arc<SkillStore>>,
+    name: String,
+) -> Result<String, AppError> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let sanitized = git_backup::sanitize_device_name(&name);
+        if sanitized.is_empty() {
+            return Err(AppError::invalid_input("Device name is empty"));
+        }
+        store
+            .set_setting("backup_device_name", &sanitized)
+            .map_err(AppError::db)?;
+        let skills_dir = central_repo::skills_dir();
+        if let Err(e) = git_backup::configure_device_identity(&skills_dir, &sanitized) {
+            log::warn!("device name: failed to configure git identity: {e:#}");
+        }
+        Ok(sanitized)
     })
     .await?
 }
@@ -583,6 +653,37 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn device_name_default_persists_and_rename_updates_repo_config() {
+        let env = test_env();
+        // First resolve derives a hostname default and persists it, so the
+        // name stays stable even if the hostname later changes.
+        let name = effective_device_name(&env.store);
+        assert!(!name.is_empty());
+        assert_eq!(
+            env.store.get_setting("backup_device_name").unwrap().as_deref(),
+            Some(name.as_str())
+        );
+
+        // With a repo present, a rename rewrites the repo-local identity used
+        // for all future commits (§4.3).
+        git(&env.skills_dir, &["init", "-b", "main"]);
+        env.store
+            .set_setting("backup_device_name", "Work Laptop")
+            .unwrap();
+        apply_device_identity(&env.store, &env.skills_dir);
+        let user_name = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&env.skills_dir)
+            .args(["config", "--local", "--get", "user.name"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&user_name.stdout).trim(),
+            "Work Laptop"
+        );
     }
 
     #[test]

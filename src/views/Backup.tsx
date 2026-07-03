@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Check,
   Cloud,
   Copy,
   ExternalLink,
   Github,
   History,
   Loader2,
+  Pencil,
   RefreshCw,
   Save,
   ShieldCheck,
@@ -102,6 +104,9 @@ export function Backup() {
   const [patMode, setPatMode] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState<api.GithubDeviceFlowStart | null>(null);
   const deviceCancelRef = useRef(false);
+  const [deviceName, setDeviceName] = useState("");
+  const [deviceNameDraft, setDeviceNameDraft] = useState("");
+  const [deviceNameEditing, setDeviceNameEditing] = useState(false);
 
   // Abandon an in-flight device-flow poll loop when leaving the page.
   useEffect(() => () => {
@@ -166,6 +171,7 @@ export function Backup() {
       if (migrated) {
         toast.info(t("backup.credentialsMigrated"));
       }
+      api.backupDeviceName().then(setDeviceName).catch(() => {});
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
       setRemoteInput(savedRemote);
       setRemoteConfig(savedRemote);
@@ -526,6 +532,19 @@ export function Backup() {
     }
   };
 
+  const handleSaveDeviceName = async () => {
+    const draft = deviceNameDraft.trim();
+    setDeviceNameEditing(false);
+    if (!draft || draft === deviceName) return;
+    try {
+      const saved = await api.backupSetDeviceName(draft);
+      setDeviceName(saved);
+      toast.success(t("backup.device.renamed"));
+    } catch {
+      toast.error(t("common.error"));
+    }
+  };
+
   const handleDisconnect = async () => {
     setLoading("disconnect");
     try {
@@ -584,6 +603,48 @@ export function Backup() {
                     <div>
                       <div className="text-faint">{t("backup.connection.branch")}</div>
                       <div className="font-mono text-secondary">{branchLabel}</div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-faint">{t("backup.device.label")}</div>
+                      {deviceNameEditing ? (
+                        <div className="mt-0.5 flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={deviceNameDraft}
+                            onChange={(event) => setDeviceNameDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") void handleSaveDeviceName();
+                              if (event.key === "Escape") setDeviceNameEditing(false);
+                            }}
+                            autoFocus
+                            maxLength={64}
+                            className="h-6 min-w-0 flex-1 rounded-[4px] border border-border-subtle bg-background px-1.5 text-[12px] text-secondary outline-none focus:border-border"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleSaveDeviceName}
+                            className="rounded p-0.5 text-muted transition-colors hover:text-secondary"
+                            title={t("common.save")}
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <span className="truncate text-secondary">{deviceName || "-"}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeviceNameDraft(deviceName);
+                              setDeviceNameEditing(true);
+                            }}
+                            className="rounded p-0.5 text-faint transition-colors hover:text-secondary"
+                            title={t("backup.device.rename")}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -820,6 +881,7 @@ export function Backup() {
                       </div>
                       <div className="truncate text-[12px] text-muted">{version.message || version.commit}</div>
                       <div className="text-[11px] text-faint">
+                        {version.author ? `${version.author} · ` : ""}
                         {version.commit} · {formatDateTime(version.committed_at)}
                       </div>
                     </div>

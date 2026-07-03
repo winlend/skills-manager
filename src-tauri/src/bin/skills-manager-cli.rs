@@ -1745,7 +1745,10 @@ fn run_git(args: GitArgs, has_skills_root: bool, json: bool) -> anyhow::Result<(
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json)
         }
         GitCommand::Init => {
-            git_backup::init_repo(&central_repo::skills_dir())?;
+            // No settings store on this path; the hostname default matches
+            // what the GUI derives, and the GUI reconciles the repo identity
+            // on its next backup anyway.
+            git_backup::init_repo(&central_repo::skills_dir(), &git_backup::default_device_name())?;
             print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
         }
         GitCommand::Clone { url } => {

@@ -60,6 +60,80 @@ pub struct GitBackupVersion {
     pub message: String,
     /// Commit timestamp (ISO 8601)
     pub committed_at: String,
+    /// Commit author name — the device name of the machine that made this
+    /// backup (§4.3). Empty for commits from before device naming existed.
+    pub author: String,
+}
+
+/// Default device name derived from the machine's hostname (macOS appends
+/// `.local`, which is noise for a display name).
+pub fn default_device_name() -> String {
+    let host = gethostname::gethostname().to_string_lossy().to_string();
+    let host = host.strip_suffix(".local").unwrap_or(&host).trim().to_string();
+    if host.is_empty() {
+        "My Computer".to_string()
+    } else {
+        host
+    }
+}
+
+/// Normalize a user-entered device name into something safe to use as a git
+/// author name: no control characters or `<`/`>` (git's ident syntax), single
+/// spaces, at most 64 characters. May return an empty string — callers fall
+/// back to `default_device_name()`.
+pub fn sanitize_device_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && *c != '<' && *c != '>')
+        .collect();
+    cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(64)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+/// Synthetic per-device author email: an ASCII slug of the device name at a
+/// reserved domain. Only used to make `git log`/shortlog distinguish devices;
+/// it never has to be routable.
+fn device_email(device_name: &str) -> String {
+    let mut slug = String::new();
+    for c in device_name.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let slug = if slug.is_empty() { "device" } else { slug };
+    format!("{slug}@skills-manager.local")
+}
+
+/// Write the device name into the repo-local git identity (§4.3: device name
+/// = commit author). Everything that commits in this repo afterwards — manual
+/// backups, merge commits from sync, restore commits, future auto-backup —
+/// carries the device name, and machines without a global git identity can
+/// commit at all. Idempotent; no-op when the repo doesn't exist or the name
+/// is empty.
+pub fn configure_device_identity(skills_dir: &Path, device_name: &str) -> Result<()> {
+    if device_name.trim().is_empty() || !skills_dir.join(".git").exists() {
+        return Ok(());
+    }
+    let email = device_email(device_name);
+    let current_name = run_git(skills_dir, &["config", "--local", "--get", "user.name"]).ok();
+    let current_email = run_git(skills_dir, &["config", "--local", "--get", "user.email"]).ok();
+    if current_name.as_deref() != Some(device_name) {
+        run_git_checked(skills_dir, &["config", "user.name", device_name])?;
+    }
+    if current_email.as_deref() != Some(email.as_str()) {
+        run_git_checked(skills_dir, &["config", "user.email", &email])?;
+    }
+    Ok(())
 }
 
 /// Fetch from the remote without modifying the working tree.
@@ -196,18 +270,22 @@ fn detect_upstream_health(dir: &Path, has_remote: bool) -> String {
 
 /// Initialize a new git repository in the skills directory.
 #[allow(dead_code)]
-pub fn init_repo(skills_dir: &Path) -> Result<()> {
+pub fn init_repo(skills_dir: &Path, device_name: &str) -> Result<()> {
     let _lock = RepoLock::acquire_foreground("git init")?;
-    init_repo_unlocked(skills_dir)
+    init_repo_unlocked(skills_dir, device_name)
 }
 
-pub(crate) fn init_repo_unlocked(skills_dir: &Path) -> Result<()> {
+pub(crate) fn init_repo_unlocked(skills_dir: &Path, device_name: &str) -> Result<()> {
     if skills_dir.join(".git").exists() {
         anyhow::bail!("Already a git repository");
     }
 
     run_git_checked(skills_dir, &["init"])?;
     run_git_checked(skills_dir, &["checkout", "-b", "main"])?;
+
+    // Identity must exist before the initial commit: on machines without a
+    // global git identity the commit would otherwise fail outright.
+    configure_device_identity(skills_dir, device_name)?;
 
     ensure_gitignore(skills_dir)?;
 
@@ -602,15 +680,21 @@ pub fn list_snapshot_versions(
         } else {
             commit.clone()
         };
-        let message = run_git(skills_dir, &["log", "-1", "--format=%s", tag]).unwrap_or_default();
-        let committed_at =
-            run_git(skills_dir, &["log", "-1", "--format=%cI", tag]).unwrap_or_default();
+        // Author, date and message in one call; message last because it is
+        // the only field that could contain the separator.
+        let line = run_git(skills_dir, &["log", "-1", "--format=%an%x1f%cI%x1f%s", tag])
+            .unwrap_or_default();
+        let mut parts = line.splitn(3, '\u{1f}');
+        let author = parts.next().unwrap_or_default().to_string();
+        let committed_at = parts.next().unwrap_or_default().to_string();
+        let message = parts.next().unwrap_or_default().to_string();
 
         versions.push(GitBackupVersion {
             tag: tag.to_string(),
             commit: short_commit,
             message,
             committed_at,
+            author,
         });
     }
 
@@ -1247,6 +1331,72 @@ mod tests {
     #[test]
     fn redact_urls_in_text_no_urls() {
         assert_eq!(redact_urls_in_text("plain text here"), "plain text here");
+    }
+
+    // ── device naming (§4.3: device name = commit author) ──
+
+    #[test]
+    fn sanitize_device_name_strips_ident_breakers_and_collapses_whitespace() {
+        assert_eq!(sanitize_device_name("  MacBook   Pro  "), "MacBook Pro");
+        assert_eq!(sanitize_device_name("evil<\n>name"), "evilname");
+        assert_eq!(sanitize_device_name("公司 Windows"), "公司 Windows");
+        assert_eq!(sanitize_device_name("<>"), "");
+        assert_eq!(sanitize_device_name("a".repeat(100).as_str()).chars().count(), 64);
+    }
+
+    #[test]
+    fn device_email_slugs_name_with_fallback() {
+        assert_eq!(device_email("MacBook Pro"), "macbook-pro@skills-manager.local");
+        assert_eq!(device_email("公司 Windows"), "windows@skills-manager.local");
+        assert_eq!(device_email("公司"), "device@skills-manager.local");
+    }
+
+    #[test]
+    fn default_device_name_is_never_empty() {
+        assert!(!default_device_name().is_empty());
+    }
+
+    #[test]
+    fn init_repo_commits_as_device_and_identity_follows_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Init must succeed and author the initial commit as the device,
+        // regardless of any global git identity on this machine.
+        init_repo_unlocked(dir, "MacBook Pro").unwrap();
+        assert_eq!(run_git(dir, &["log", "-1", "--format=%an"]).unwrap(), "MacBook Pro");
+        assert_eq!(
+            run_git(dir, &["config", "--local", "--get", "user.email"]).unwrap(),
+            "macbook-pro@skills-manager.local"
+        );
+
+        // Renaming the device only affects commits made afterwards.
+        configure_device_identity(dir, "公司 Windows").unwrap();
+        std::fs::write(dir.join("note.md"), "x").unwrap();
+        commit_all_unlocked(dir, "backup").unwrap();
+        assert_eq!(run_git(dir, &["log", "-1", "--format=%an"]).unwrap(), "公司 Windows");
+
+        // And the snapshot history exposes the author per entry.
+        let tag = create_snapshot_tag_unlocked(dir).unwrap();
+        let versions = list_snapshot_versions(dir, None).unwrap();
+        let entry = versions.iter().find(|v| v.tag == tag).unwrap();
+        assert_eq!(entry.author, "公司 Windows");
+        assert_eq!(entry.message, "backup");
+        assert!(!entry.committed_at.is_empty());
+    }
+
+    #[test]
+    fn configure_device_identity_noop_without_repo_or_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Not a repo: must not fail (and must not create one).
+        configure_device_identity(tmp.path(), "MacBook Pro").unwrap();
+        assert!(!tmp.path().join(".git").exists());
+        // Empty name on a real repo: leaves identity untouched.
+        init_repo_unlocked(tmp.path(), "Device A").unwrap();
+        configure_device_identity(tmp.path(), "  ").unwrap();
+        assert_eq!(
+            run_git(tmp.path(), &["config", "--local", "--get", "user.name"]).unwrap(),
+            "Device A"
+        );
     }
 
     // ── parse_restored_from_tag_message ──

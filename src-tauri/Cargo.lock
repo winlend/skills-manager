@@ -4952,6 +4952,7 @@ dependencies = [
  "clap",
  "dirs 5.0.1",
  "fs2",
+ "gethostname",
  "git2",
  "hex",
  "image",

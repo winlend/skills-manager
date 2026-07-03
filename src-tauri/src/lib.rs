@@ -997,6 +997,8 @@ pub fn run() {
             commands::git_backup::git_backup_create_snapshot,
             commands::git_backup::git_backup_list_versions,
             commands::git_backup::git_backup_restore_version,
+            commands::git_backup::backup_device_name,
+            commands::git_backup::backup_set_device_name,
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,
