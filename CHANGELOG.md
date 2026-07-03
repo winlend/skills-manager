@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] - 2026-07-03
+
+### Release Overview
+- Backup redesign Phase 2: connect your backup by signing in with GitHub — no repository setup, no tokens to paste, no git knowledge required.
+
+### User-facing
+- **Sign in with GitHub** — The Backup page's new primary connect path: click once, enter an 8-character code in the browser, and the app does the rest — creates a private `skills-manager-backup` repository (name adjustable), stores the sign-in credential in the system keychain, and then either restores your existing backup or pushes the first one. The credential never appears in any file, and the app never sees your GitHub password.
+- **Personal access token as the advanced option** — Prefer a token, or need it as a network fallback? An "advanced" toggle in the same panel accepts a PAT with the same automatic repository setup, plus a pre-filled token-creation link. Network errors during sign-in point here explicitly.
+- **Public-repository warning** — Repositories the app creates are always private; if you connect a pre-existing PUBLIC repository, a warning now explains what that exposes and how to change the visibility on GitHub.
+- **Built-in Git engine (experimental)** — A new Settings toggle routes the backup's HTTPS network operations (fetch, push, clone, remote checks) through the app's built-in Git engine: no system git required, credentials injected in memory from the keychain. Default off; SSH and custom remotes always use system git; switch back anytime.
+
+### Developer & Governance
+- New `core/github_api.rs`: minimal GitHub REST client (token validation, find-or-create private repo, device flow start/poll) with stable error markers mapped to plain-language copy; honors the app proxy setting. Both device-flow endpoints verified against the live OAuth client id.
+- The OAuth App client id ships in the binary by design (public identifier, device flow enabled); there is deliberately no client secret. On authorization the OAuth token completes the entire connect in the backend — it never reaches the webview.
+- New `core/git2_engine.rs`: network-operations-only scope, keychain credentials via the git2 callback (2-attempt cap), errors normalized to system git's vocabulary so the existing UI error mapping and recovery routing work unchanged; push parity (tracking ref + upstream config) covered by local bare-repo roundtrip and non-fast-forward rejection tests.
+- Engine preference syncs from settings at every network command entry; a failed built-in-engine clone cleans its partial target so retries don't wedge.
+- Windows test fix: platform-correct `file:///C:/...` URLs in the git2 engine tests.
+
 ## [1.26.0] - 2026-07-03
 
 ### Release Overview
