@@ -143,6 +143,16 @@
     "credentialsMigrated": "偵測到備份位址中包含存取權杖，已將其轉移至系統鑰匙圈，不再出現在任何檔案中。",
     "restoreSafetyPoint": "還原前的狀態已儲存為備份點 {{tag}}，可隨時從歷史中還原。"
   },
+  "firstRun": {
+    "title": "全新開始，還是從備份還原？",
+    "subtitle": "你的技能庫還是空的。如果你在其他裝置上已有備份，貼上備份儲存庫位址即可把所有技能同步過來。",
+    "urlLabel": "備份儲存庫位址",
+    "startFresh": "全新開始",
+    "restore": "連線並還原",
+    "restoring": "正在還原…",
+    "restoreSuccess": "備份已還原，技能已就緒。",
+    "hint": "之後隨時可以在側邊欄的「備份」頁連線或還原備份。"
+  },
   "mySkills": {
     "title": "技能庫",
     "applyToDefault": "套用 Preset",

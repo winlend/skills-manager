@@ -143,6 +143,16 @@
     "credentialsMigrated": "The access token found in your backup URL was moved to the system keychain. It no longer appears in any file.",
     "restoreSafetyPoint": "Your previous state was saved as snapshot {{tag}} — you can restore it from the history at any time."
   },
+  "firstRun": {
+    "title": "Start fresh, or restore from a backup?",
+    "subtitle": "Your skill library is empty. If you already back up skills on another machine, paste the backup repository URL to bring everything here.",
+    "urlLabel": "Backup repository URL",
+    "startFresh": "Start Fresh",
+    "restore": "Connect & Restore",
+    "restoring": "Restoring…",
+    "restoreSuccess": "Backup restored — your skills are ready.",
+    "hint": "You can connect or restore a backup at any time from the Backup page in the sidebar."
+  },
   "mySkills": {
     "title": "Library",
     "applyToDefault": "Apply Preset",

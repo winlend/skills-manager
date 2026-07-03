@@ -129,29 +129,30 @@ pub async fn git_backup_set_remote(
 pub async fn git_backup_remove_remote(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
     let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
-    tokio::task::spawn_blocking(move || {
-        // Collect credential hosts before the URLs are gone.
-        let mut hosts = std::collections::HashSet::new();
-        if let Some(url) = git_backup::raw_remote_url(&skills_dir) {
-            hosts.extend(git_credentials::https_host(&url));
-        }
-        if let Ok(Some(url)) = store.get_setting("git_backup_remote_url") {
-            hosts.extend(git_credentials::https_host(&url));
-        }
+    tokio::task::spawn_blocking(move || disconnect_local(&store, &skills_dir)).await?
+}
 
-        git_backup::remove_remote(&skills_dir).map_err(AppError::git)?;
-        store
-            .set_setting("git_backup_remote_url", "")
-            .map_err(AppError::db)?;
+fn disconnect_local(store: &SkillStore, skills_dir: &Path) -> Result<(), AppError> {
+    // Collect credential hosts before the URLs are gone.
+    let mut hosts = std::collections::HashSet::new();
+    if let Some(url) = git_backup::raw_remote_url(skills_dir) {
+        hosts.extend(git_credentials::https_host(&url));
+    }
+    if let Ok(Some(url)) = store.get_setting("git_backup_remote_url") {
+        hosts.extend(git_credentials::https_host(&url));
+    }
 
-        for host in hosts {
-            if let Err(e) = git_credentials::delete_credential(&host) {
-                log::warn!("git disconnect: failed to delete keychain credential: {e:#}");
-            }
+    git_backup::remove_remote(skills_dir).map_err(AppError::git)?;
+    store
+        .set_setting("git_backup_remote_url", "")
+        .map_err(AppError::db)?;
+
+    for host in hosts {
+        if let Err(e) = git_credentials::delete_credential(&host) {
+            log::warn!("git disconnect: failed to delete keychain credential: {e:#}");
         }
-        Ok(())
-    })
-    .await?
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -454,6 +455,32 @@ mod tests {
             migrate_embedded_credentials_unlocked(&env.store, &env.skills_dir).unwrap();
         assert_eq!(result, None);
         assert_eq!(origin_url(&env.skills_dir), "https://github.com/acme/repo.git");
+    }
+
+    #[test]
+    fn disconnect_clears_origin_and_setting_and_is_idempotent() {
+        // #260 acceptance: after "disconnect this machine" neither the git
+        // origin nor the saved setting may survive, so nothing can backfill
+        // the URL when the settings page reopens.
+        let env = test_env();
+        git(&env.skills_dir, &["init", "-b", "main"]);
+        git(
+            &env.skills_dir,
+            &["remote", "add", "origin", "https://github.com/acme/repo.git"],
+        );
+        env.store
+            .set_setting("git_backup_remote_url", "https://github.com/acme/repo.git")
+            .unwrap();
+
+        disconnect_local(&env.store, &env.skills_dir).unwrap();
+        assert_eq!(origin_url(&env.skills_dir), "");
+        assert_eq!(
+            env.store.get_setting("git_backup_remote_url").unwrap().as_deref(),
+            Some("")
+        );
+
+        // A second disconnect (nothing left to remove) must still succeed.
+        disconnect_local(&env.store, &env.skills_dir).unwrap();
     }
 
     #[test]

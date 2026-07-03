@@ -20,7 +20,8 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { GitRecoveryDialog } from "../components/GitRecoveryDialog";
 import { GitSetupDialog } from "../components/GitSetupDialog";
 import { useApp } from "../context/AppContext";
-import { getErrorKind, getErrorMessage } from "../lib/error";
+import { getErrorMessage } from "../lib/error";
+import { mapGitErrorMessage } from "../lib/gitErrors";
 import * as api from "../lib/tauri";
 import type {
   GitBackupSizeReport,
@@ -87,51 +88,10 @@ export function Backup() {
   const [backupError, setBackupError] = useState<string | null>(null);
   const [sizeReport, setSizeReport] = useState<GitBackupSizeReport | null>(null);
 
-  const mapGitError = useCallback((error: unknown) => {
-    const kind = getErrorKind(error);
-    const message = getErrorMessage(error, "");
-
-    if (kind === "network") return t("settings.gitErrorNetwork");
-    if (
-      message.includes("Authentication failed")
-      || message.includes("Permission denied")
-      || message.includes("could not read Username")
-    ) {
-      return t("settings.gitErrorAuth");
-    }
-    if (
-      message.includes("Could not resolve host")
-      || message.includes("Failed to connect")
-      || message.includes("Connection timed out")
-      || /connection\s+refused/i.test(message)
-    ) {
-      return t("settings.gitErrorNetwork");
-    }
-    if (message.includes("unrelated histories") || message.includes("refusing to merge")) {
-      return t("settings.gitErrorUnrelatedHistories");
-    }
-    if (
-      message.includes("[rejected]")
-      || message.includes("non-fast-forward")
-      || message.includes("fetch first")
-      || message.includes("failed to push some refs")
-    ) {
-      return t("settings.gitErrorRejected");
-    }
-    if (message.includes("no upstream") || message.includes("has no upstream branch")) {
-      return t("settings.gitErrorNoUpstream");
-    }
-    if (message.includes("CONFLICT") || message.includes("conflict")) {
-      return t("settings.gitErrorConflict");
-    }
-    if (message.includes("not a git repository")) {
-      return t("settings.gitErrorNotRepo");
-    }
-    const detail = message.trim();
-    return detail && detail !== "Error"
-      ? `${t("settings.gitErrorGeneric")} (${detail})`
-      : t("settings.gitErrorGeneric");
-  }, [t]);
+  const mapGitError = useCallback(
+    (error: unknown) => mapGitErrorMessage(error, t),
+    [t],
+  );
 
   const isSyncConflictError = (error: unknown) => {
     const message = getErrorMessage(error, "");

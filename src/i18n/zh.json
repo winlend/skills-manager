@@ -143,6 +143,16 @@
     "credentialsMigrated": "检测到备份地址中包含访问令牌，已将其转移至系统钥匙串，不再出现在任何文件中。",
     "restoreSafetyPoint": "恢复前的状态已保存为备份点 {{tag}}，可随时从历史中恢复。"
   },
+  "firstRun": {
+    "title": "全新开始，还是从备份恢复？",
+    "subtitle": "你的技能库还是空的。如果你在其他设备上已有备份，粘贴备份仓库地址即可把所有技能同步过来。",
+    "urlLabel": "备份仓库地址",
+    "startFresh": "全新开始",
+    "restore": "连接并恢复",
+    "restoring": "正在恢复…",
+    "restoreSuccess": "备份已恢复，技能已就绪。",
+    "hint": "之后随时可以在侧边栏的「备份」页连接或恢复备份。"
+  },
   "mySkills": {
     "title": "技能库",
     "applyToDefault": "应用 Preset",

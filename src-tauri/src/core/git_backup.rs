@@ -1230,6 +1230,52 @@ mod tests {
         assert_eq!(count_changed_top_dirs(""), 0);
     }
 
+    // ── #244 acceptance: status stable across a simulated restart ──
+
+    #[test]
+    fn status_reports_in_sync_after_backup_cycle_and_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+
+        assert!(Command::new("git")
+            .args(["init", "--bare", "--initial-branch=main"])
+            .arg(&remote)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        let git = |args: &[&str]| {
+            let out = Command::new("git").arg("-C").arg(&work).args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["config", "push.autoSetupRemote", "false"]);
+
+        // Full backup cycle: add a skill, commit, snapshot, push.
+        std::fs::create_dir_all(work.join("skill-a")).unwrap();
+        std::fs::write(work.join("skill-a/SKILL.md"), "content").unwrap();
+        commit_all_unlocked(&work, "backup").unwrap();
+        set_remote_unlocked(&work, remote.to_str().unwrap()).unwrap();
+        let tag = create_snapshot_tag_unlocked(&work).unwrap();
+        push_unlocked(&work).unwrap();
+
+        // Simulated restart: a fresh fetch + status read (what the app does
+        // on launch) must still say "in sync" — not pending, not divergent.
+        fetch_remote(&work).unwrap();
+        let status = get_status(&work).unwrap();
+        assert!(status.is_repo);
+        assert_eq!(status.upstream_health, "healthy");
+        assert!(!status.has_changes, "no pending changes after clean sync");
+        assert_eq!(status.changed_skill_count, 0);
+        assert_eq!((status.ahead, status.behind), (0, 0));
+        assert_eq!(status.current_snapshot_tag.as_deref(), Some(tag.as_str()));
+    }
+
     // ── restore safety point ──
 
     #[test]
