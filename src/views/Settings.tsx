@@ -190,7 +190,8 @@ export function Settings() {
   const [gitRemoteSaving, setGitRemoteSaving] = useState(false);
   const [gitRemoteDisconnecting, setGitRemoteDisconnecting] = useState(false);
   const [gitEngineGit2, setGitEngineGit2] = useState(false);
-  const [gitMergeEngineObject, setGitMergeEngineObject] = useState(false);
+  // Object merge is the default since 3d-β; "system" is the opt-out.
+  const [gitMergeEngineObject, setGitMergeEngineObject] = useState(true);
   const [proxyInput, setProxyInput] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [textSize, setTextSize] = useState("default");
@@ -367,7 +368,7 @@ export function Settings() {
       setGitEngineGit2(v?.trim() === "git2");
     }).catch(() => {});
     api.getSettings("merge_engine").then((v) => {
-      setGitMergeEngineObject(v?.trim() === "object");
+      setGitMergeEngineObject((v ?? "").trim() !== "system");
     }).catch(() => {});
   }, []);
 
