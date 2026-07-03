@@ -132,7 +132,8 @@
       "deviceExpired": "验证码已过期。点击「使用 GitHub 登录」重新获取。",
       "deviceDenied": "授权在 GitHub 上被拒绝，未做任何更改。",
       "deviceFallbackPat": "如果你的网络访问 github.com 不稳定，可改用下方的个人访问令牌方式。",
-      "patToggle": "改用个人访问令牌（高级）"
+      "patToggle": "改用个人访问令牌（高级）",
+      "publicRepoWarning": "注意：连接的备份仓库是公开的——任何人都能看到你的技能、标签和 Preset。如非有意，请到 GitHub 仓库的 Settings → General → Danger Zone → Change visibility 改为私有。"
     },
     "history": {
       "title": "备份历史",

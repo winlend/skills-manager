@@ -542,6 +542,8 @@ export interface GithubBackupConnectResult {
   url: string;
   login: string;
   repo_created: boolean;
+  /** False when a pre-existing PUBLIC repository was connected. */
+  repo_private: boolean;
   remote_has_content: boolean;
 }
 

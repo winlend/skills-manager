@@ -25,6 +25,10 @@ pub struct GithubConnectInfo {
     /// Credential-free HTTPS clone URL.
     pub url: String,
     pub repo_created: bool,
+    /// False when the user connected a pre-existing PUBLIC repository — the
+    /// UI warns, since a public backup is almost never intentional.
+    /// Repositories created by the app are always private.
+    pub repo_private: bool,
 }
 
 #[derive(Deserialize)]
@@ -35,6 +39,9 @@ struct UserResp {
 #[derive(Deserialize)]
 struct RepoResp {
     full_name: String,
+    /// Missing field is treated as private so a parsing gap can only ever
+    /// suppress the warning, never raise a false alarm.
+    private: Option<bool>,
 }
 
 /// GitHub repository name rules (subset): ASCII letters, digits, `-`, `_`,
@@ -95,10 +102,10 @@ pub fn connect_backup_repo(
     .send()
     .context("GITHUB_NETWORK: could not reach api.github.com")?;
 
-    let (repo_created, full_name) = match resp.status().as_u16() {
+    let (repo_created, repo) = match resp.status().as_u16() {
         200 => (
             false,
-            resp.json::<RepoResp>().context("Unexpected repo response")?.full_name,
+            resp.json::<RepoResp>().context("Unexpected repo response")?,
         ),
         404 => {
             let resp = request(&client, reqwest::Method::POST, &format!("{API_BASE}/user/repos"), token)
@@ -113,7 +120,7 @@ pub fn connect_backup_repo(
             match resp.status().as_u16() {
                 201 => (
                     true,
-                    resp.json::<RepoResp>().context("Unexpected create-repo response")?.full_name,
+                    resp.json::<RepoResp>().context("Unexpected create-repo response")?,
                 ),
                 401 => bail!("GITHUB_TOKEN_INVALID: GitHub rejected the token (401)"),
                 // Classic PATs without `repo` scope and fine-grained tokens
@@ -129,14 +136,17 @@ pub fn connect_backup_repo(
         s => bail!("GitHub repo lookup returned HTTP {s}"),
     };
 
+    let full_name = repo.full_name;
+    let repo_private = repo.private.unwrap_or(true);
     log::info!(
-        "github connect: using repository {full_name} (created={repo_created})"
+        "github connect: using repository {full_name} (created={repo_created}, private={repo_private})"
     );
     Ok(GithubConnectInfo {
         login,
         url: format!("https://github.com/{full_name}.git"),
         repo_full_name: full_name,
         repo_created,
+        repo_private,
     })
 }
 

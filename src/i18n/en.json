@@ -132,7 +132,8 @@
       "deviceExpired": "The verification code expired. Click \"Sign in with GitHub\" to get a new one.",
       "deviceDenied": "Authorization was declined on GitHub. Nothing was changed.",
       "deviceFallbackPat": "If github.com is hard to reach from your network, use a personal access token below instead.",
-      "patToggle": "Use a personal access token instead (advanced)"
+      "patToggle": "Use a personal access token instead (advanced)",
+      "publicRepoWarning": "Heads up: the connected backup repository is PUBLIC — anyone can read your skills, tags, and presets. If that's not intended, make it private on GitHub: repository Settings → General → Danger Zone → Change visibility."
     },
     "history": {
       "title": "Backup History",

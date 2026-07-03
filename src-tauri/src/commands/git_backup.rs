@@ -101,6 +101,9 @@ pub struct GithubBackupConnectResult {
     pub url: String,
     pub login: String,
     pub repo_created: bool,
+    /// False when a pre-existing PUBLIC repository was connected — the UI
+    /// warns; app-created repositories are always private.
+    pub repo_private: bool,
     /// True when the remote already has commits — the frontend restores
     /// (clones) instead of initializing a fresh backup.
     pub remote_has_content: bool,
@@ -160,6 +163,7 @@ fn connect_with_token(
         url: info.url,
         login: info.login,
         repo_created: info.repo_created,
+        repo_private: info.repo_private,
         remote_has_content,
     })
 }

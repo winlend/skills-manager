@@ -132,7 +132,8 @@
       "deviceExpired": "驗證碼已過期。點擊「使用 GitHub 登入」重新取得。",
       "deviceDenied": "授權在 GitHub 上被拒絕，未做任何變更。",
       "deviceFallbackPat": "如果你的網路存取 github.com 不穩定，可改用下方的個人存取權杖方式。",
-      "patToggle": "改用個人存取權杖（進階）"
+      "patToggle": "改用個人存取權杖（進階）",
+      "publicRepoWarning": "注意：連線的備份儲存庫是公開的——任何人都能看到你的技能、標籤和 Preset。如非有意，請到 GitHub 儲存庫的 Settings → General → Danger Zone → Change visibility 改為私有。"
     },
     "history": {
       "title": "備份歷史",

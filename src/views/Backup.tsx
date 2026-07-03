@@ -419,6 +419,10 @@ export function Backup() {
       const repo = res.url.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
       toast.success(t("backup.github.repoCreated", { repo }));
     }
+    if (!res.repo_private) {
+      // Connecting a backup to a PUBLIC repo is almost never intentional.
+      toast.warning(t("backup.github.publicRepoWarning"), { duration: 15000 });
+    }
     const status = await api.gitBackupStatus();
     if (res.remote_has_content) {
       // Existing backup: restore it (or just rewire when a repo already exists).
