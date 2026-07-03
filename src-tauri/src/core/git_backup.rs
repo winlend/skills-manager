@@ -413,6 +413,12 @@ fn remove_remote_unlocked(skills_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether the working tree has any uncommitted change (staged, unstaged or
+/// untracked). Cheap porcelain probe used by the auto-backup round.
+pub(crate) fn has_uncommitted_changes(skills_dir: &Path) -> Result<bool> {
+    Ok(!run_git(skills_dir, &["status", "--porcelain"])?.is_empty())
+}
+
 /// Stage all changes and create a commit.
 #[allow(dead_code)]
 pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
@@ -1080,7 +1086,7 @@ fn ensure_repo(skills_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_no_interrupted_git_operation(skills_dir: &Path) -> Result<()> {
+pub(crate) fn ensure_no_interrupted_git_operation(skills_dir: &Path) -> Result<()> {
     let git_dir = skills_dir.join(".git");
     for marker in ["MERGE_HEAD", "index.lock", "rebase-merge", "rebase-apply"] {
         if git_dir.join(marker).exists() {

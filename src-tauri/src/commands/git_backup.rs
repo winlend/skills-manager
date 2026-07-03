@@ -16,7 +16,7 @@ static FETCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 /// Push the persisted engine choice (`git_backup_engine` = "git2" | "system")
 /// and proxy setting into the core layer, which has no store access. Called
 /// at the entry of every command that can touch the network.
-fn sync_engine_pref(store: &SkillStore) {
+pub(crate) fn sync_engine_pref(store: &SkillStore) {
     let git2_enabled = store
         .get_setting("git_backup_engine")
         .ok()
@@ -49,7 +49,7 @@ fn effective_device_name(store: &SkillStore) -> String {
 /// Best-effort: bring the repo's commit identity in line with the device name
 /// before an operation that can create commits. Identity trouble must never
 /// block a backup — commits then just carry the previous (or global) author.
-fn apply_device_identity(store: &SkillStore, skills_dir: &Path) {
+pub(crate) fn apply_device_identity(store: &SkillStore, skills_dir: &Path) {
     let name = effective_device_name(store);
     if let Err(e) = git_backup::configure_device_identity(skills_dir, &name) {
         log::warn!("device name: failed to configure git identity: {e:#}");
@@ -348,9 +348,14 @@ pub async fn git_backup_commit(
 #[tauri::command]
 pub async fn git_backup_push(store: State<'_, Arc<SkillStore>>) -> Result<(), AppError> {
     sync_engine_pref(&store);
+    let store = store.inner().clone();
     let skills_dir = central_repo::skills_dir();
     tokio::task::spawn_blocking(move || {
-        git_backup::push(&skills_dir).map_err(AppError::classify_git_error)
+        git_backup::push(&skills_dir).map_err(AppError::classify_git_error)?;
+        // A successful manual push also resolves any lingering auto-backup
+        // failure — the persistent failure card must not outlive the problem.
+        let _ = store.set_setting(crate::core::auto_backup::SETTING_LAST_ERROR, "");
+        Ok(())
     })
     .await?
 }

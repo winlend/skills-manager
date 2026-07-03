@@ -111,6 +111,10 @@
       "none": "Not connected",
       "unknown": "Unknown"
     },
+    "auto": {
+      "title": "Automatic backup",
+      "desc": "Back up automatically a few minutes after changes settle; a local save also runs when the app quits."
+    },
     "device": {
       "label": "This device",
       "rename": "Rename device",

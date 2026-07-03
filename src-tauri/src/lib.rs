@@ -760,6 +760,11 @@ pub fn quit_app(app: &tauri::AppHandle) {
             log::error!("Failed to destroy main window while quitting: {err}");
         }
     }
+    // 退出前 auto-backup (§3.4): local commit only, fail-fast on a busy lock,
+    // after the window is gone so quitting feels instant.
+    if let Some(store) = app.try_state::<Arc<core::skill_store::SkillStore>>() {
+        core::auto_backup::commit_on_exit(&store);
+    }
     app.exit(0);
 }
 
@@ -867,6 +872,11 @@ pub fn run() {
                 "startup: skill auto-updater spawned in {} ms",
                 step.elapsed().as_millis()
             );
+
+            // Automatic backup (§3.4): debounced commit+push after central-repo
+            // changes; the first round also uploads whatever the exit-time
+            // commit captured last session.
+            core::auto_backup::start(app.handle().clone(), store_for_setup.clone());
 
             // One-time (idempotent) security migration: move credentials
             // embedded in the backup remote URL into the OS keychain so no

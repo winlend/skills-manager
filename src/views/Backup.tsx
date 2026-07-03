@@ -18,6 +18,7 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
@@ -107,6 +108,8 @@ export function Backup() {
   const [deviceName, setDeviceName] = useState("");
   const [deviceNameDraft, setDeviceNameDraft] = useState("");
   const [deviceNameEditing, setDeviceNameEditing] = useState(false);
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
+  const [autoBackupSaving, setAutoBackupSaving] = useState(false);
 
   // Abandon an in-flight device-flow poll loop when leaving the page.
   useEffect(() => () => {
@@ -172,6 +175,20 @@ export function Backup() {
         toast.info(t("backup.credentialsMigrated"));
       }
       api.backupDeviceName().then(setDeviceName).catch(() => {});
+      api.getSettings("backup_auto_enabled")
+        .then((v) => {
+          const normalized = (v ?? "").trim().toLowerCase();
+          setAutoBackupEnabled(!["off", "false", "0", "no"].includes(normalized));
+        })
+        .catch(() => {});
+      // A failed automatic backup persists until a backup succeeds (§3.4) —
+      // resurface it when the page opens.
+      api.getSettings("backup_last_auto_error")
+        .then((v) => {
+          const raw = (v ?? "").trim();
+          if (raw) setBackupError(mapGitError(raw));
+        })
+        .catch(() => {});
       const savedRemote = (await api.getSettings("git_backup_remote_url").catch(() => null))?.trim() || "";
       setRemoteInput(savedRemote);
       setRemoteConfig(savedRemote);
@@ -181,7 +198,35 @@ export function Backup() {
         api.gitBackupSizeReport().then(setSizeReport).catch(() => setSizeReport(null));
       }
     })();
-  }, [refreshGitStatus, refreshVersions, t]);
+  }, [mapGitError, refreshGitStatus, refreshVersions, t]);
+
+  // Live updates from the background auto-backup rounds.
+  useEffect(() => {
+    const unlistenPromise = listen<{ ok: boolean; pending: boolean; error: string | null }>(
+      "backup-auto-completed",
+      (event) => {
+        setBackupError(event.payload.error ? mapGitError(event.payload.error) : null);
+        void refreshGitStatus();
+        void refreshVersions();
+      },
+    );
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [mapGitError, refreshGitStatus, refreshVersions]);
+
+  const handleToggleAutoBackup = async () => {
+    const next = !autoBackupEnabled;
+    setAutoBackupSaving(true);
+    try {
+      await api.setSettings("backup_auto_enabled", next ? "on" : "off");
+      setAutoBackupEnabled(next);
+    } catch {
+      toast.error(t("common.error"));
+    } finally {
+      setAutoBackupSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (gitStatus?.is_repo) {
@@ -938,6 +983,34 @@ export function Backup() {
                 {t("backup.scope.sizeHint")}
               </div>
             )}
+          </section>
+
+          <section className="app-panel p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-[14px] font-semibold text-secondary">{t("backup.auto.title")}</h2>
+                <p className="mt-1 text-[12px] leading-5 text-muted">{t("backup.auto.desc")}</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoBackupEnabled}
+                onClick={handleToggleAutoBackup}
+                disabled={autoBackupSaving}
+                className={cn(
+                  "relative mt-0.5 inline-flex h-4 w-7 shrink-0 items-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent",
+                  autoBackupEnabled ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600",
+                  autoBackupSaving ? "cursor-wait opacity-60" : "cursor-pointer"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-flex h-3 w-3 items-center justify-center rounded-full bg-white shadow transition-transform",
+                    autoBackupEnabled ? "translate-x-3.5" : "translate-x-0.5"
+                  )}
+                />
+              </button>
+            </div>
           </section>
 
           <section className="app-panel p-4">
