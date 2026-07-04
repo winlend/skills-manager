@@ -45,8 +45,8 @@
         "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Use Preset pills to activate skill groups, or open + Add Skills to pick from your library with a multi-agent target picker."
       },
       "backup": {
-        "title": "Backup",
-        "description": "Use the Backup page to connect a repository, run a backup, restore a snapshot, and disconnect this machine. Skills, tags, presets, and preset membership are backed up; secrets and machine-specific settings are not."
+        "title": "Backup & Sync",
+        "description": "Sign in with GitHub once on the Backup page — backups then run automatically, and devices connected to the same repository stay in sync with each other. If the same skill is edited on two devices, it shows up under \"Needs attention\" with three choices (keep mine / use remote / keep both); a safety snapshot precedes every choice. Secrets and machine-specific settings are never backed up."
       },
       "settings": {
         "title": "Settings",
