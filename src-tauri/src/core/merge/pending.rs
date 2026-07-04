@@ -215,10 +215,15 @@ pub fn promote_staging(repo: &Repository, attempt_id: &str) -> Result<()> {
 }
 
 /// Startup recovery for pending refs (§4 启动恢复协议): make sure every id
-/// declared active by HEAD's history has a durable conflict ref — promoting
-/// from staging when possible, else rebuilding from the declaring merge
-/// commit's second parent (which also makes freshly-cloned devices able to
-/// resolve with the remote version). Ghost staging refs are then removed.
+/// declared active by HEAD's history has a durable conflict ref pointing at
+/// (or past) its **current** declaration — promoting from staging when
+/// possible, else rebuilding from the declaring merge commit's second parent
+/// (which also makes freshly-cloned devices able to resolve with the remote
+/// version). An existing ref that merely advanced beyond the declaration
+/// (仅推进对端指针) is kept; one left over from a superseded declaration
+/// (resolved, then re-declared while this device was offline) is rewritten —
+/// otherwise "use remote" would apply the pre-resolution version. Ghost
+/// staging refs are then removed.
 pub fn heal_conflict_refs(repo: &Repository, head: Oid) -> Result<Vec<(String, Oid)>> {
     let active: Vec<String> = replay_trailers(repo, head, None)?
         .into_iter()
@@ -229,17 +234,22 @@ pub fn heal_conflict_refs(repo: &Repository, head: Oid) -> Result<Vec<(String, O
     let staging = list_staging_refs(repo);
     let mut healed = Vec::new();
     for id in &active {
-        if ref_target(repo, &conflict_ref(id)).is_some() {
-            continue;
-        }
-        let target = staging
+        let desired = staging
             .iter()
             .find(|(_, skill_id, _)| skill_id == id)
             .map(|(_, _, t)| *t)
             .or_else(|| find_declaring_theirs(repo, head, id));
-        if let Some(target) = target {
-            write_ref(repo, &conflict_ref(id), target, "heal conflict ref")?;
-            healed.push((id.clone(), target));
+        let Some(desired) = desired else { continue };
+        let up_to_date = match ref_target(repo, &conflict_ref(id)) {
+            None => false,
+            Some(existing) if existing == desired => true,
+            // A pointer that descends from the current declaration's theirs
+            // side was legitimately advanced; anything else is stale.
+            Some(existing) => repo.graph_descendant_of(existing, desired).unwrap_or(false),
+        };
+        if !up_to_date {
+            write_ref(repo, &conflict_ref(id), desired, "heal conflict ref")?;
+            healed.push((id.clone(), desired));
         }
     }
     for (attempt, skill_id, _) in staging {

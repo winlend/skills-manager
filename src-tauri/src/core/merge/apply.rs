@@ -295,18 +295,25 @@ fn finish_apply(
     let mut checkout = git2::build::CheckoutBuilder::new();
     checkout.force();
     if let Err(e) = repo.checkout_tree(new_tree.as_object(), Some(&mut checkout)) {
-        // Roll the ref back; the working tree still equals the old tree
-        // (checkout failed before changing anything, or recovery will fix
-        // the remainder at next startup via the applying marker).
+        // Roll the ref back and restore the (possibly partially checked-out)
+        // working tree. The applying marker is only cleared once the
+        // rollback checkout succeeded — otherwise it stays so the startup
+        // recovery settles the working tree (§5 恢复协议).
         let _ = repo.reference(&branch_ref, old_head, true, "object merge rollback");
-        let mut co = git2::build::CheckoutBuilder::new();
-        co.force();
-        if let Ok(old_commit) = repo.find_commit(old_head) {
-            if let Ok(old_tree) = old_commit.tree() {
-                let _ = repo.checkout_tree(old_tree.as_object(), Some(&mut co));
-            }
+        let rolled_back = repo
+            .find_commit(old_head)
+            .and_then(|c| c.tree())
+            .and_then(|old_tree| {
+                let mut co = git2::build::CheckoutBuilder::new();
+                co.force();
+                repo.checkout_tree(old_tree.as_object(), Some(&mut co))
+            });
+        match rolled_back {
+            Ok(()) => pending::delete_ref(repo, REF_APPLYING),
+            Err(rollback_err) => log::error!(
+                "object merge: rollback checkout also failed, leaving applying marker for startup recovery: {rollback_err}"
+            ),
         }
-        pending::delete_ref(repo, REF_APPLYING);
         return Err(anyhow::Error::from(e).context("checkout of merged tree failed; rolled back"));
     }
 
@@ -901,9 +908,14 @@ fn recover_locked(store: &SkillStore, skills_dir: &Path) -> Result<()> {
         let old_head = pending::ref_target(&repo, REF_PRE_MERGE);
         match old_head {
             Some(old_head) if head == old_head => {
-                // Crash between marker and branch move: merge never took
-                // effect — clean up and treat as not happened.
-                log::info!("merge recovery: apply never landed, cleaning markers");
+                // Crash between marker and branch move, or a crashed
+                // rollback: the merge never took effect. The working tree
+                // may still carry a partial checkout from the failed
+                // attempt — settle it back onto HEAD (rescuing anything
+                // that differs; debris and user edits made since the crash
+                // cannot be told apart, so both are kept safe).
+                log::info!("merge recovery: apply never landed, cleaning up");
+                settle_worktree(&repo, old_head)?;
                 pending::delete_ref(&repo, REF_APPLYING);
                 pending::delete_ref(&repo, REF_PRE_MERGE);
                 for (attempt, skill_id, _) in pending::list_staging_refs(&repo) {
@@ -946,13 +958,23 @@ fn recover_locked(store: &SkillStore, skills_dir: &Path) -> Result<()> {
 /// crash, snapshot it to a rescue commit + user-visible tag first; then
 /// finish checkout and step-11 cleanup.
 fn replay_interrupted_apply(repo: &Repository, old_head: Oid, head: Oid) -> Result<()> {
-    let old_tree = repo.find_commit(old_head)?.tree()?;
-    let head_commit = repo.find_commit(head)?;
-    let head_tree = head_commit.tree()?;
+    settle_worktree_from(repo, old_head, head)?;
+    pending::heal_conflict_refs(repo, head)?;
+    pending::delete_ref(repo, REF_APPLYING);
+    Ok(())
+}
 
-    if !worktree_matches_tree(repo, &old_tree, &head_tree)? {
-        // User (or an external editor) modified files after the crash and
-        // before this restart — never FORCE over them silently.
+/// Settle the working tree onto `target` after a crash: an untouched tree
+/// (still exactly `expected_clean`, ignoring unrelated untracked files) is
+/// force-checked-out directly; anything else — user edits or debris from a
+/// partial checkout — is preserved first in a rescue commit + user-visible
+/// snapshot tag. Never silently overwrites (§5 恢复不吞用户数据).
+fn settle_worktree_from(repo: &Repository, expected_clean: Oid, target: Oid) -> Result<()> {
+    let expected_tree = repo.find_commit(expected_clean)?.tree()?;
+    let target_commit = repo.find_commit(target)?;
+    let target_tree = target_commit.tree()?;
+
+    if !worktree_matches_tree(repo, &expected_tree, &target_tree)? {
         let sig = repo
             .signature()
             .or_else(|_| git2::Signature::now("Skills Manager", "skills-manager@local"))?;
@@ -965,7 +987,7 @@ fn replay_interrupted_apply(repo: &Repository, old_head: Oid, head: Oid) -> Resu
             &sig,
             &protocol::app_commit_message("rescue: working tree changed during interrupted sync"),
             &rescue_tree,
-            &[&head_commit],
+            &[&target_commit],
         )?;
         let tag = format!(
             "sm-v-{}-{}",
@@ -973,16 +995,17 @@ fn replay_interrupted_apply(repo: &Repository, old_head: Oid, head: Oid) -> Resu
             &rescue.to_string()[..7]
         );
         repo.tag_lightweight(&tag, &repo.find_object(rescue, None)?, true)?;
-        log::warn!("merge recovery: user edits preserved in rescue snapshot {tag}");
+        log::warn!("merge recovery: working tree preserved in rescue snapshot {tag}");
     }
 
     let mut checkout = git2::build::CheckoutBuilder::new();
     checkout.force();
-    repo.checkout_tree(head_tree.as_object(), Some(&mut checkout))?;
-
-    pending::heal_conflict_refs(repo, head)?;
-    pending::delete_ref(repo, REF_APPLYING);
+    repo.checkout_tree(target_tree.as_object(), Some(&mut checkout))?;
     Ok(())
+}
+
+fn settle_worktree(repo: &Repository, target: Oid) -> Result<()> {
+    settle_worktree_from(repo, target, target)
 }
 
 /// Whether the working tree exactly matches `expected`, considering only

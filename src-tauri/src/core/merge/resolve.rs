@@ -111,19 +111,18 @@ fn apply_use_remote(
     let theirs_snap = snapshot::read_snapshot(repo, &theirs_tree)
         .context("failed to read the pinned remote version")?;
 
-    // Drop the local version (dir + metadata) whatever its current path is.
     let local_meta = read_worktree_meta(skills_dir, skill_id)?;
-    if let Some(meta) = &local_meta {
-        let dir = skills_dir.join(&meta.path);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
-    }
     let meta_file = worktree_meta_path(skills_dir, skill_id);
 
     let Some(theirs_skill) = theirs_snap.skills.get(skill_id) else {
         // The remote side of this conflict was a deletion — adopting it means
         // deleting locally.
+        if let Some(meta) = &local_meta {
+            let dir = skills_dir.join(&meta.path);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)?;
+            }
+        }
         if meta_file.exists() {
             std::fs::remove_file(&meta_file)?;
         }
@@ -133,8 +132,18 @@ fn apply_use_remote(
         .content
         .context("pinned remote version has no content directory")?;
 
+    // Stage the remote content OUTSIDE the library first: a mid-extraction
+    // failure (disk full, permissions) must leave the local version intact
+    // instead of a half-replaced skill that the next auto backup commits.
     let target_path = free_path_for(skills_dir, &theirs_skill.meta.path, skill_id)?;
-    extract_tree_to_dir(repo, &repo.find_tree(content)?, &skills_dir.join(&target_path))?;
+    let staged = stage_skill_extract(repo, content, skills_dir)?;
+    if let Some(meta) = &local_meta {
+        let dir = skills_dir.join(&meta.path);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
+        }
+    }
+    place_staged(&staged, skills_dir, &target_path)?;
 
     let meta = SkillMetaFile {
         schema_version: theirs_skill.meta.schema_version,
@@ -178,7 +187,8 @@ fn apply_keep_both(
     let base_name = format!("{} ({})", theirs_skill.meta.path, suffix);
     let new_id = uuid::Uuid::new_v4().to_string();
     let target_path = free_path_for(skills_dir, &base_name, &new_id)?;
-    extract_tree_to_dir(repo, &repo.find_tree(content)?, &skills_dir.join(&target_path))?;
+    let staged = stage_skill_extract(repo, content, skills_dir)?;
+    place_staged(&staged, skills_dir, &target_path)?;
 
     let meta = SkillMetaFile {
         schema_version: theirs_skill.meta.schema_version,
@@ -255,6 +265,42 @@ fn free_path_for(skills_dir: &Path, wanted: &str, own_id: &str) -> Result<String
         }
     }
     bail!("no free path found for {wanted}");
+}
+
+/// Extract a content tree into a staging directory *next to* (never inside)
+/// the library, on the same volume so the final move is a plain rename.
+/// Cleans up after itself on failure.
+fn stage_skill_extract(
+    repo: &Repository,
+    content: git2::Oid,
+    skills_dir: &Path,
+) -> Result<std::path::PathBuf> {
+    let staging_parent = skills_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let staged = staging_parent.join(format!(".sm-resolve-{}", uuid::Uuid::now_v7()));
+    match extract_tree_to_dir(repo, &repo.find_tree(content)?, &staged) {
+        Ok(()) => Ok(staged),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staged);
+            Err(e)
+        }
+    }
+}
+
+/// Move a staged extraction into its final place inside the library.
+fn place_staged(staged: &Path, skills_dir: &Path, target_rel: &str) -> Result<()> {
+    let target = skills_dir.join(target_rel);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if let Err(e) = std::fs::rename(staged, &target) {
+        let _ = std::fs::remove_dir_all(staged);
+        return Err(anyhow::Error::from(e)
+            .context(format!("failed to move resolved skill into {}", target.display())));
+    }
+    Ok(())
 }
 
 fn extract_tree_to_dir(repo: &Repository, tree: &git2::Tree, dest: &Path) -> Result<()> {

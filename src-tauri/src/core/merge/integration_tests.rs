@@ -537,6 +537,38 @@ fn pending_placeholder_from_theirs_trailer_wins_path_collision() {
     assert_eq!(summary.pending_total, 1);
 }
 
+#[test]
+fn remote_deletion_leaves_local_ignored_files_untouched() {
+    // codex review finding 3 (empirical half): a plain remote deletion of a
+    // skill dir must not take locally-ignored files inside it with it — the
+    // FORCE checkout only removes tracked paths. (The dir→file typechange
+    // case is separately blocked by the added-path pre-check.)
+    let env = setup();
+    let (a, b) = seeded_pair(&env);
+
+    b.activate();
+    b.remove_skill("skill-1", "alpha");
+    b.commit("delete alpha");
+    b.push();
+
+    a.activate();
+    a.write_skill("skill-2", "beta", "diverge so this is a real merge");
+    a.commit("local");
+    std::fs::write(a.skills.join(".git/info/exclude"), "debug.log\n").unwrap();
+    std::fs::write(a.skills.join("alpha/debug.log"), "precious ignored data").unwrap();
+
+    let summary = a.pull();
+    assert!(summary.new_conflicts.is_empty(), "{summary:?}");
+    // The tracked skill is gone…
+    assert!(!a.skills.join("alpha/SKILL.md").exists());
+    assert!(a.meta_of("skill-1").is_none());
+    // …but the ignored file inside it survived the checkout.
+    assert_eq!(
+        std::fs::read_to_string(a.skills.join("alpha/debug.log")).unwrap(),
+        "precious ignored data"
+    );
+}
+
 // ── crash recovery (§5 启动恢复协议) ──
 
 /// Builds a repo state crashed between branch-move (step 9) and checkout
@@ -617,6 +649,104 @@ fn recovery_rescues_user_edits_made_after_crash() {
     let tag = tags.lines().last().unwrap();
     let rescued = git(&a.skills, &["show", &format!("{tag}:alpha/SKILL.md")]);
     assert_eq!(rescued, "user edit during crash");
+}
+
+#[test]
+fn recovery_settles_partial_rollback_debris_back_onto_head() {
+    // codex review finding 1: crash after the branch ref was rolled back to
+    // old HEAD but before the working tree was restored — recovery must not
+    // just delete the markers and leave half-merged debris to be committed
+    // as ordinary edits.
+    let env = setup();
+    let a = env.device_a();
+    a.write_skill("skill-1", "alpha", "base");
+    a.commit("seed");
+
+    a.activate();
+    let repo = git2::Repository::open(&a.skills).unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+    pending::write_ref(&repo, REF_PRE_MERGE, head, "test").unwrap();
+    pending::write_ref(&repo, REF_APPLYING, head, "test").unwrap();
+    drop(repo);
+    // Debris from a partially applied (then crashed) checkout.
+    std::fs::write(a.skills.join("alpha/SKILL.md"), "half-merged debris").unwrap();
+    std::fs::write(a.skills.join("stray-from-merge.md"), "debris").unwrap();
+
+    recover_on_startup(&a.store, &a.skills);
+
+    // Working tree settled back to HEAD…
+    assert_eq!(a.skill_md("alpha"), "base");
+    assert!(!a.skills.join("stray-from-merge.md").exists());
+    assert!(!git_backup::has_uncommitted_changes(&a.skills).unwrap());
+    // …markers gone, debris preserved in a rescue snapshot.
+    let repo = git2::Repository::open(&a.skills).unwrap();
+    assert!(pending::ref_target(&repo, REF_APPLYING).is_none());
+    let tags = git(&a.skills, &["tag", "--list", "sm-v-*"]);
+    let tag = tags.lines().last().expect("rescue tag expected");
+    assert_eq!(
+        git(&a.skills, &["show", &format!("{tag}:alpha/SKILL.md")]),
+        "half-merged debris"
+    );
+}
+
+#[test]
+fn heal_rewrites_stale_conflict_ref_after_re_declaration() {
+    // codex review finding 2: a conflict resolved and then re-declared while
+    // this device was offline must not keep the pre-resolution pointer —
+    // "use remote" would apply the outdated version.
+    let env = setup();
+    let a = env.device_a();
+    a.write_skill("skill-1", "alpha", "base");
+    a.commit("seed");
+    a.activate();
+
+    // History: declaration M1 (theirs parent P1) → resolution → new
+    // declaration M2 (theirs parent P2), crafted with raw merges carrying
+    // the app trailers.
+    let mk_side = |name: &str, content: &str| {
+        git(&a.skills, &["checkout", "-b", name]);
+        std::fs::write(a.skills.join("alpha/SKILL.md"), content).unwrap();
+        git(&a.skills, &["commit", "-am", &format!("side {name}")]);
+        let sha = git(&a.skills, &["rev-parse", "HEAD"]);
+        git(&a.skills, &["checkout", "main"]);
+        sha
+    };
+    let p1 = mk_side("side1", "theirs v1");
+    git(&a.skills, &[
+        "merge", "--no-ff", "-s", "ours",
+        "-m", "sync: merge\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Conflicts: skill-1",
+        "side1",
+    ]);
+    git(&a.skills, &[
+        "commit", "--allow-empty",
+        "-m", "resolve\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Resolved: skill-1",
+    ]);
+    let p2 = mk_side("side2", "theirs v2");
+    git(&a.skills, &[
+        "merge", "--no-ff", "-s", "ours",
+        "-m", "sync: merge\n\nSkills-Manager-Protocol: 2\nSkills-Manager-Conflicts: skill-1",
+        "side2",
+    ]);
+
+    let repo = git2::Repository::open(&a.skills).unwrap();
+    let head = repo.head().unwrap().target().unwrap();
+    // Stale ref from the first (since resolved) declaration.
+    pending::write_ref(
+        &repo,
+        &conflict_ref("skill-1"),
+        git2::Oid::from_str(&p1).unwrap(),
+        "stale",
+    )
+    .unwrap();
+
+    let healed = pending::heal_conflict_refs(&repo, head).unwrap();
+    assert_eq!(healed.len(), 1);
+    let target = pending::ref_target(&repo, &conflict_ref("skill-1")).unwrap();
+    assert_eq!(target.to_string(), p2, "ref must point at the current declaration's theirs side");
+
+    // A legitimately advanced pointer (descendant of P2) is left alone.
+    let healed_again = pending::heal_conflict_refs(&repo, head).unwrap();
+    assert!(healed_again.is_empty());
 }
 
 #[test]
@@ -738,13 +868,25 @@ fn legacy_remote_without_protocol_falls_back_to_system_merge() {
     git(&b.skills, &["commit", "-m", "legacy write"]);
     git(&b.skills, &["push", "origin", "main"]);
 
+    // Diverge A so the fallback produces a real merge commit.
     a.activate();
+    a.write_skill("skill-2", "beta", "local divergence");
+    a.commit("local");
     let summary = a.pull();
     assert!(summary.legacy_fallback, "{summary:?}");
     assert_eq!(summary.engine, "system");
     assert_eq!(
         std::fs::read_to_string(a.skills.join("legacy-note.md")).unwrap(),
         "from legacy client"
+    );
+    // codex review finding 4: the app's own line merge must carry the
+    // protocol trailer, or other devices would block it as an old-client
+    // double-parent violation (§6).
+    let head_msg = a.head_message();
+    assert!(protocol::has_protocol_trailer(&head_msg), "{head_msg}");
+    assert!(
+        git(&a.skills, &["rev-list", "--parents", "-1", "HEAD"]).split_whitespace().count() >= 3,
+        "fallback should have produced a merge commit"
     );
 }
 

@@ -680,10 +680,21 @@ pub(crate) fn fetch_branch(skills_dir: &Path, branch: &str) -> Result<()> {
 }
 
 /// Line-level merge of the already-fetched remote branch via system git —
-/// the pre-object-merge behavior, still used by default and as the legacy
-/// fallback of the object engine (merge-engine design §6).
+/// used by the `merge_engine=system` escape hatch and as the legacy fallback
+/// of the object engine (merge-engine design §6).
+///
+/// The merge commit carries the protocol trailer (`app_commit`): without it,
+/// this app's own line merge would read as an old-client double-parent
+/// violation on every other device and block their object merges. A
+/// conflict-free line merge preserves both sides' file-level changes (the
+/// conflicting case aborts below), and every later object merge re-validates
+/// its own output (§7), so trusting our own stamped line merges is sound.
 pub(crate) fn merge_branch_system(skills_dir: &Path, branch: &str) -> Result<()> {
-    if let Err(e) = run_git(skills_dir, &["merge", &format!("origin/{branch}")]) {
+    let message = protocol::app_commit_message("sync: merge remote skill changes (line merge)");
+    if let Err(e) = run_git(
+        skills_dir,
+        &["merge", "-m", &message, &format!("origin/{branch}")],
+    ) {
         // A failed merge — almost always a content conflict on a SKILL.md body
         // edited on two machines — leaves the working tree conflicted with
         // MERGE_HEAD behind, which `ensure_no_interrupted_git_operation` would

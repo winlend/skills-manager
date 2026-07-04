@@ -181,6 +181,10 @@ fn walk_unclaimed(
     depth: usize,
 ) -> Result<()> {
     if depth >= MAX_SKILL_DEPTH {
+        // Deliberately mirrors reconcile's WalkDir max_depth(6) horizon: a
+        // SKILL.md deeper than 6 components is not a skill anywhere in the
+        // system — reconcile never adopts it, merges treat its files as
+        // residual — so it is not an unclaimed-dir violation either.
         return Ok(());
     }
     for entry in tree.iter() {
