@@ -80,7 +80,7 @@ pub fn sync_skill(source: &Path, target: &Path, mode: SyncMode) -> Result<SyncMo
 
     // A real write to a watched dir follows: mute the watcher so this
     // app-initiated change doesn't echo back as a redundant refresh (#248).
-    crate::core::file_watcher::mute_self_writes();
+    crate::core::file_watcher::mute_self_writes(target);
 
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
@@ -220,7 +220,7 @@ pub fn remove_target(target: &Path) -> Result<()> {
     };
 
     // An actual removal from a watched dir follows: mute the self-write echo.
-    crate::core::file_watcher::mute_self_writes();
+    crate::core::file_watcher::mute_self_writes(target);
 
     if metadata.file_type().is_symlink() {
         #[cfg(windows)]

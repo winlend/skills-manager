@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -19,22 +18,74 @@ const WATCH_EMIT_DEBOUNCE: Duration = Duration::from_millis(500);
 /// made moments after a sync is still surfaced by the next event or rescan.
 const SELF_WRITE_MUTE: Duration = Duration::from_millis(1200);
 
-/// Monotonic-ms deadline (relative to [`EPOCH`]) until which watcher emits are
-/// suppressed because the app itself is writing to watched dirs (#248: the
-/// app's own sync writes echoed back as `app-files-changed`, forcing a
-/// redundant full `refreshAppData` - and historically refresh storms). 0 = not
-/// muted. A monotonic base avoids wall-clock jumps breaking the window.
-static SUPPRESS_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// Paths the app is currently writing to, plus the monotonic-ms deadline
+/// (relative to [`EPOCH`]) until which their watcher echoes are suppressed
+/// (#248: the app's own sync writes echoed back as `app-files-changed`,
+/// forcing a redundant full `refreshAppData` - and historically refresh
+/// storms). Path-scoped so a genuine external edit landing inside the window
+/// is still surfaced (deferred) instead of silently dropped. A monotonic base
+/// avoids wall-clock jumps breaking the window.
+static MUTE_STATE: OnceLock<Mutex<MuteState>> = OnceLock::new();
 static EPOCH: OnceLock<Instant> = OnceLock::new();
+
+#[derive(Default)]
+struct MuteState {
+    deadline_ms: u64,
+    roots: Vec<PathBuf>,
+}
+
+fn mute_state() -> &'static Mutex<MuteState> {
+    MUTE_STATE.get_or_init(|| Mutex::new(MuteState::default()))
+}
 
 fn now_ms() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
 /// Pure predicate split out so the mute window is unit-testable without touching
-/// the process-global clock or atomic.
+/// the process-global clock or state.
 fn muted_at(now_ms: u64, suppress_until_ms: u64) -> bool {
     now_ms < suppress_until_ms
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum MuteVerdict {
+    /// Outside any mute window.
+    Live,
+    /// Inside the window and every event path is under a dir the app itself
+    /// just wrote: the echo the mute exists to swallow.
+    SelfWrite,
+    /// Inside the window but touching paths the app did NOT write (or a
+    /// path-less rescan): someone else changed something while we were noisy.
+    Foreign,
+}
+
+/// Pure classification split out for unit tests. `event_paths` empty means
+/// "no path information" (watch-set rescan) — treated as Foreign so it defers
+/// rather than vanishes.
+fn classify_mute(
+    now_ms: u64,
+    deadline_ms: u64,
+    roots: &[PathBuf],
+    event_paths: &[PathBuf],
+) -> MuteVerdict {
+    if !muted_at(now_ms, deadline_ms) {
+        return MuteVerdict::Live;
+    }
+    if !event_paths.is_empty()
+        && event_paths
+            .iter()
+            .all(|path| roots.iter().any(|root| path.starts_with(root)))
+    {
+        MuteVerdict::SelfWrite
+    } else {
+        MuteVerdict::Foreign
+    }
+}
+
+fn classify_event_paths(event_paths: &[PathBuf]) -> MuteVerdict {
+    let state = mute_state().lock().unwrap();
+    classify_mute(now_ms(), state.deadline_ms, &state.roots, event_paths)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -46,39 +97,58 @@ enum EmitAction {
     /// when a user/external edit lands within the mute window (the whole point
     /// of the mute is to hide OUR writes, not theirs).
     Defer,
-    /// Nothing to forward (irrelevant event, or debounce coalesces it into an
-    /// emit that already happened).
+    /// Nothing to forward (irrelevant event, our own write echo, or debounce
+    /// coalesces it into an emit that already happened).
     Skip,
 }
 
 /// Pure routing for one observed change, split out for unit tests. `relevant`
-/// = the event/rescan actually warrants a refresh; `muted` = inside the
-/// self-write window; `debounced` = an emit fired less than the debounce ago.
-fn decide_emit(relevant: bool, muted: bool, debounced: bool) -> EmitAction {
+/// = the event/rescan actually warrants a refresh; `debounced` = an emit fired
+/// less than the debounce ago.
+fn decide_emit(relevant: bool, mute: MuteVerdict, debounced: bool) -> EmitAction {
     if !relevant {
-        EmitAction::Skip
-    } else if muted {
-        EmitAction::Defer
-    } else if debounced {
-        EmitAction::Skip
-    } else {
-        EmitAction::Emit
+        return EmitAction::Skip;
+    }
+    match mute {
+        // The frontend already refreshed after the user action that caused
+        // our write; its echo is pure redundant work (#248).
+        MuteVerdict::SelfWrite => EmitAction::Skip,
+        MuteVerdict::Foreign => EmitAction::Defer,
+        MuteVerdict::Live => {
+            if debounced {
+                EmitAction::Skip
+            } else {
+                EmitAction::Emit
+            }
+        }
     }
 }
 
-/// Suppress `app-files-changed` emissions for [`SELF_WRITE_MUTE`] because the
-/// app is about to write to a watched directory. The frontend already refreshes
-/// after the user action that triggered the write, so echoing those writes back
-/// is pure redundant work. Extends (never shrinks) an in-flight window, so a
-/// burst of writes keeps the watcher quiet until the burst settles. A no-op when
-/// no watcher is running (e.g. the CLI), since nothing reads the flag.
-pub fn mute_self_writes() {
-    let deadline = now_ms().saturating_add(SELF_WRITE_MUTE.as_millis() as u64);
-    SUPPRESS_UNTIL_MS.fetch_max(deadline, Ordering::Relaxed);
+/// Suppress the watcher echo of an app write under `target` for
+/// [`SELF_WRITE_MUTE`]. The frontend already refreshes after the user action
+/// that triggered the write, so echoing it back is pure redundant work.
+/// Extends (never shrinks) an in-flight window and accumulates the batch's
+/// roots, so a burst of writes keeps its own echoes quiet until it settles;
+/// once the window expires the root list resets. Only paths under a recorded
+/// root are treated as self-writes — anything else observed during the window
+/// is deferred, not dropped. A no-op when no watcher is running (e.g. the
+/// CLI), since nothing reads the state.
+pub fn mute_self_writes(target: &Path) {
+    let now = now_ms();
+    let mut state = mute_state().lock().unwrap();
+    if !muted_at(now, state.deadline_ms) {
+        state.roots.clear();
+    }
+    state.deadline_ms = state
+        .deadline_ms
+        .max(now.saturating_add(SELF_WRITE_MUTE.as_millis() as u64));
+    if !state.roots.iter().any(|root| target.starts_with(root)) {
+        state.roots.push(target.to_path_buf());
+    }
 }
 
 fn self_write_muted() -> bool {
-    muted_at(now_ms(), SUPPRESS_UNTIL_MS.load(Ordering::Relaxed))
+    muted_at(now_ms(), mute_state().lock().unwrap().deadline_ms)
 }
 
 fn collect_watch_paths(store: &SkillStore) -> Vec<PathBuf> {
@@ -248,9 +318,11 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
         loop {
             if last_sync.elapsed() >= WATCH_RESCAN_INTERVAL {
                 let changed = sync_watch_set(&mut watcher, &mut watched, &store);
+                // No path information here, so a mute window classifies as
+                // Foreign: the change defers instead of vanishing.
                 match decide_emit(
                     changed,
-                    self_write_muted(),
+                    classify_event_paths(&[]),
                     last_emit.elapsed() < WATCH_EMIT_DEBOUNCE,
                 ) {
                     EmitAction::Emit => emit_now(&mut last_emit),
@@ -276,7 +348,7 @@ pub fn start_file_watcher<R: tauri::Runtime>(app: tauri::AppHandle<R>, store: Ar
                     }
                     match decide_emit(
                         should_emit(&event),
-                        self_write_muted(),
+                        classify_event_paths(&event.paths),
                         last_emit.elapsed() < WATCH_EMIT_DEBOUNCE,
                     ) {
                         EmitAction::Emit => emit_now(&mut last_emit),
@@ -313,19 +385,64 @@ mod tests {
     }
 
     #[test]
-    fn muted_relevant_changes_are_deferred_not_dropped() {
-        use super::{decide_emit, EmitAction};
+    fn mute_swallows_own_echo_but_defers_foreign_changes() {
+        use super::{decide_emit, EmitAction, MuteVerdict};
 
-        // The mute hides the app's own write echo, but a real change during
-        // the window must survive as a deferred emit — never vanish.
-        assert_eq!(decide_emit(true, true, false), EmitAction::Defer);
-        assert_eq!(decide_emit(true, true, true), EmitAction::Defer);
+        // Our own write echo is the thing the mute exists to swallow (#248).
+        assert_eq!(
+            decide_emit(true, MuteVerdict::SelfWrite, false),
+            EmitAction::Skip
+        );
+        // A real foreign change during the window must survive as a deferred
+        // emit — never vanish — regardless of debounce.
+        assert_eq!(
+            decide_emit(true, MuteVerdict::Foreign, false),
+            EmitAction::Defer
+        );
+        assert_eq!(
+            decide_emit(true, MuteVerdict::Foreign, true),
+            EmitAction::Defer
+        );
         // Live and quiet → emit; only debounce coalesces.
-        assert_eq!(decide_emit(true, false, false), EmitAction::Emit);
-        assert_eq!(decide_emit(true, false, true), EmitAction::Skip);
+        assert_eq!(
+            decide_emit(true, MuteVerdict::Live, false),
+            EmitAction::Emit
+        );
+        assert_eq!(decide_emit(true, MuteVerdict::Live, true), EmitAction::Skip);
         // Irrelevant events never emit or defer, muted or not.
-        assert_eq!(decide_emit(false, true, false), EmitAction::Skip);
-        assert_eq!(decide_emit(false, false, false), EmitAction::Skip);
+        assert_eq!(
+            decide_emit(false, MuteVerdict::Foreign, false),
+            EmitAction::Skip
+        );
+        assert_eq!(
+            decide_emit(false, MuteVerdict::Live, false),
+            EmitAction::Skip
+        );
+    }
+
+    #[test]
+    fn mute_classification_is_path_scoped() {
+        use super::{classify_mute, MuteVerdict};
+        use std::path::PathBuf;
+
+        let roots = vec![PathBuf::from("/agents/claude/skills/foo")];
+        let inside = vec![PathBuf::from("/agents/claude/skills/foo/SKILL.md")];
+        let outside = vec![PathBuf::from("/agents/codex/skills/bar/SKILL.md")];
+        let mixed = vec![inside[0].clone(), outside[0].clone()];
+
+        // Outside the window everything is Live, whatever the paths say.
+        assert_eq!(classify_mute(10, 10, &roots, &inside), MuteVerdict::Live);
+
+        // Inside the window: only events fully under a written root are our
+        // own echo; anything touching other paths is a foreign change.
+        assert_eq!(
+            classify_mute(5, 10, &roots, &inside),
+            MuteVerdict::SelfWrite
+        );
+        assert_eq!(classify_mute(5, 10, &roots, &outside), MuteVerdict::Foreign);
+        assert_eq!(classify_mute(5, 10, &roots, &mixed), MuteVerdict::Foreign);
+        // No path info (watch-set rescan) defers rather than vanishes.
+        assert_eq!(classify_mute(5, 10, &roots, &[]), MuteVerdict::Foreign);
     }
 
     #[test]

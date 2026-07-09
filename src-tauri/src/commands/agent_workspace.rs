@@ -341,25 +341,18 @@ fn import_agent_local_skill_to_center(
 /// attempted to backfill. See [`backfill_stranded_agent_targets`] for why.
 const BACKFILL_SIG_KEY: &str = "backfill_stranded_candidates_sig";
 
-/// Cheap change detector for one candidate's on-disk state: max mtime (ms)
-/// plus entry count across the tree, 0/0 when the path is missing. Candidates
-/// are few, so walking just their dirs costs ~ms — nothing like the full
-/// scan-and-hash of every agent the gate exists to avoid. Any edit, restore or
-/// deletion moves the fingerprint and re-arms the scan; a false re-arm merely
-/// costs one extra scan.
-fn path_mtime_fingerprint(path: &str) -> (u64, u64) {
-    let mut latest_ms = 0u64;
-    let mut entries = 0u64;
-    for entry in walkdir::WalkDir::new(path).into_iter().flatten() {
-        entries += 1;
-        let Ok(meta) = entry.metadata() else { continue };
-        if let Ok(modified) = meta.modified() {
-            if let Ok(elapsed) = modified.duration_since(std::time::UNIX_EPOCH) {
-                latest_ms = latest_ms.max(elapsed.as_millis() as u64);
-            }
-        }
+/// Change detector for one candidate's on-disk state: the same content hash
+/// the repair itself compares (which ignores junk like `.DS_Store`, so noise
+/// can't churn the gate), plus an existence marker since `hash_directory`
+/// hashes a missing dir like an empty one. Candidates are few, so hashing
+/// just their dirs costs ~ms — nothing like the full scan-and-hash of every
+/// agent the gate exists to avoid. The gate then re-arms exactly when a
+/// candidate's repair inputs changed.
+fn dir_content_fingerprint(path: &str) -> String {
+    if !Path::new(path).exists() {
+        return "missing".to_string();
     }
-    (latest_ms, entries)
+    content_hash::hash_directory(Path::new(path)).unwrap_or_else(|_| "unreadable".to_string())
 }
 
 /// Signature of the current stranded set: skills carrying a non-empty
@@ -371,8 +364,9 @@ fn path_mtime_fingerprint(path: &str) -> (u64, u64) {
 /// whether a candidate is repairable, so the gate re-arms when repair might
 /// newly succeed — not only when the set itself changes: the available
 /// (installed + enabled) adapter keys, each candidate's DB content hash, and
-/// mtime fingerprints of its local and central dirs (a diverged local restored
-/// to match center, or center edited to match the local, must re-arm).
+/// content fingerprints of its local and central dirs (a diverged local
+/// restored to match center, or center edited to match the local, must
+/// re-arm).
 fn stranded_candidate_signature(
     all_managed: &[SkillRecord],
     all_targets: &[SkillTargetRecord],
@@ -419,9 +413,8 @@ fn stranded_candidate_signature(
         hasher.update([0]);
         hasher.update(db_hash.as_bytes());
         for path in [source_ref, central_path] {
-            let (mtime_ms, entries) = path_mtime_fingerprint(path);
-            hasher.update(mtime_ms.to_le_bytes());
-            hasher.update(entries.to_le_bytes());
+            hasher.update([0]);
+            hasher.update(dir_content_fingerprint(path).as_bytes());
         }
         hasher.update([0xff]);
     }
@@ -509,11 +502,22 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
             // we now run concurrently with the user (post-#248 the backfill is
             // off the setup path). Re-hash both sides of THIS skill immediately
             // before writing so an edit made since the scan is never clobbered
-            // by the central copy. One dir each — cheap.
-            let fresh_local = content_hash::hash_directory(Path::new(&skill.path)).ok();
-            let fresh_center =
-                content_hash::hash_directory(Path::new(&matched.central_path)).ok();
-            if fresh_local.is_none() || fresh_local != fresh_center {
+            // by the central copy. One dir each — cheap. Explicit existence
+            // checks because hash_directory treats a missing dir like an empty
+            // one instead of failing.
+            let local_path = Path::new(&skill.path);
+            let center_path = Path::new(&matched.central_path);
+            let fresh_match = local_path.exists()
+                && center_path.exists()
+                && match (
+                    content_hash::hash_directory(local_path),
+                    content_hash::hash_directory(center_path),
+                ) {
+                    (Ok(local), Ok(center)) => local == center,
+                    // Fail closed: if either side can't be read, don't write.
+                    _ => false,
+                };
+            if !fresh_match {
                 log::info!(
                     "backfill: skipping stranded skill '{}' on agent '{}': content changed since scan",
                     matched.name,
@@ -1199,17 +1203,24 @@ mod tests {
         assert_eq!(backfill_stranded_agent_targets(&store), 0);
         assert!(store.get_all_targets().unwrap().is_empty());
 
-        // A change to the candidate's on-disk state (here: the local copy's
-        // mtime moves, e.g. the user restored or touched it) must re-arm the
-        // scan — "candidate set unchanged" is not "repairability unchanged".
+        // Divergence changes the candidate's content fingerprint → the gate
+        // re-arms → the scan runs but correctly refuses to repair a diverged
+        // local (that could clobber newer local edits); the attempt re-seeds
+        // the gate with the diverged state.
         let skill_md = skill_dir.join("SKILL.md");
-        let file = std::fs::File::options()
-            .write(true)
-            .open(&skill_md)
-            .unwrap();
-        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
-            .unwrap();
-        drop(file);
+        let original = std::fs::read(&skill_md).unwrap();
+        std::fs::write(
+            &skill_md,
+            "---\nname: local-tool\ndescription: Agent copy\n---\nedited locally\n",
+        )
+        .unwrap();
+        assert_eq!(backfill_stranded_agent_targets(&store), 0);
+        assert!(store.get_all_targets().unwrap().is_empty());
+
+        // Restoring the local copy to match center must re-arm once more and
+        // now complete the repair — "candidate set unchanged" is not
+        // "repairability unchanged".
+        std::fs::write(&skill_md, original).unwrap();
         assert_eq!(backfill_stranded_agent_targets(&store), 1);
         assert_eq!(store.get_all_targets().unwrap().len(), 1);
 
