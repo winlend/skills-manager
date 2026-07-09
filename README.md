@@ -260,6 +260,12 @@ Skills Manager is ad-hoc signed but not notarized (no paid Apple Developer ID), 
 
   Replace the path with wherever you placed the `.app` file if it's not in `/Applications`.
 
+## Star History
+
+<p align="center">
+  <img src="assets/star-history.svg" width="800" alt="Star History chart for xingkongliang/skills-manager" />
+</p>
+
 ## License
 
 MIT

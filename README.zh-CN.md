@@ -218,6 +218,12 @@ Skills Manager 使用 ad-hoc 签名，未做 Apple 公证（没有付费的 Appl
 
   如果 `.app` 不在 `/Applications`，请替换为实际路径。
 
+## Star 增长
+
+<p align="center">
+  <img src="assets/star-history.svg" width="800" alt="xingkongliang/skills-manager 的 Star History 图" />
+</p>
+
 ## License
 
 MIT
