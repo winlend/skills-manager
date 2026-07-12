@@ -16,7 +16,7 @@ const PROMPT_SETTING_KEY = "backup_first_run_prompt";
  */
 export function FirstRunRestoreDialog() {
   const { t } = useTranslation();
-  const { managedSkills, loading: skillsLoading, refreshManagedSkills } = useApp();
+  const { managedSkills, loading: skillsLoading, refreshManagedSkills, refreshPresets } = useApp();
   const [open, setOpen] = useState(false);
   const [checked, setChecked] = useState(false);
   const [url, setUrl] = useState("");
@@ -58,7 +58,9 @@ export function FirstRunRestoreDialog() {
       await api.setSettings("git_backup_remote_url", effective);
       await api.gitBackupClone(effective);
       await api.setSettings(PROMPT_SETTING_KEY, "restored").catch(() => {});
-      await refreshManagedSkills();
+      // Restore pulls skills AND presets/scenarios from metadata; refresh both
+      // so the sidebar preset list isn't empty until a restart (#302).
+      await Promise.all([refreshManagedSkills(), refreshPresets()]);
       toast.success(t("firstRun.restoreSuccess"));
       setOpen(false);
     } catch (err) {

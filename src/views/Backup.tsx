@@ -84,7 +84,7 @@ function formatBytes(bytes: number) {
 
 export function Backup() {
   const { t } = useTranslation();
-  const { managedSkills, refreshManagedSkills } = useApp();
+  const { managedSkills, refreshManagedSkills, refreshPresets } = useApp();
   const [gitStatus, setGitStatus] = useState<GitBackupStatus | null>(null);
   const [remoteInput, setRemoteInput] = useState("");
   const [remoteConfig, setRemoteConfig] = useState("");
@@ -234,12 +234,21 @@ export function Backup() {
         void refreshGitStatus();
         void refreshVersions();
         void refreshPendingConflicts();
+        // A completed background round may have merged remote changes into the
+        // library (multi-device auto-sync reindexes skills + presets into the
+        // DB). The merge is an app-internal write, so the file watcher's
+        // self-write mute can swallow it — refresh here so the sidebar reflects
+        // remote presets/skills without waiting for a restart (#302).
+        if (event.payload.ok && !event.payload.pending) {
+          void refreshManagedSkills();
+          void refreshPresets();
+        }
       },
     );
     return () => {
       void unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
     };
-  }, [mapGitError, refreshGitStatus, refreshPendingConflicts, refreshVersions]);
+  }, [mapGitError, refreshGitStatus, refreshPendingConflicts, refreshVersions, refreshManagedSkills, refreshPresets]);
 
   const handleToggleAutoBackup = async () => {
     const next = !autoBackupEnabled;
@@ -377,7 +386,7 @@ export function Backup() {
     try {
       await api.gitBackupClone(remoteConfig);
       toast.success(t("settings.gitCloneSuccess"));
-      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshVersions()]);
+      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
     } catch (error) {
       toast.error(mapGitError(error));
       throw error;
@@ -412,7 +421,7 @@ export function Backup() {
     try {
       await api.gitBackupReclone(remoteConfig);
       toast.success(t("settings.gitRecoveryRecloneSuccess"));
-      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshVersions()]);
+      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
     } catch (error) {
       toast.error(mapGitError(error));
       throw error;
@@ -467,7 +476,7 @@ export function Backup() {
         toast.success(t("settings.gitPullSuccess"));
       }
       if (merge) {
-        await refreshManagedSkills();
+        await Promise.all([refreshManagedSkills(), refreshPresets()]);
       }
       if (outcome.pushed && outcome.snapshot_tag) {
         toast.success(t("mySkills.gitSyncSuccessWithVersion", { tag: displaySnapshotLabel(outcome.snapshot_tag) }));
@@ -513,6 +522,9 @@ export function Backup() {
         refreshGitStatus(),
         refreshVersions(),
         refreshManagedSkills(),
+        // "Use remote"/"keep both" reindex metadata, which can move preset
+        // memberships — keep the sidebar in sync (#302).
+        refreshPresets(),
       ]);
     } catch (error) {
       toast.error(mapGitError(error));
@@ -570,7 +582,7 @@ export function Backup() {
         await api.gitBackupSetRemote(res.url);
       }
       toast.success(t("backup.github.connectedRestored"));
-      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshVersions()]);
+      await Promise.all([refreshGitStatus(true), refreshManagedSkills(), refreshPresets(), refreshVersions()]);
     } else {
       // Fresh backup: initialize if needed, wire the remote, run the first backup.
       if (!status.is_repo) {
@@ -655,7 +667,7 @@ export function Backup() {
       const safetyTag = await api.gitBackupRestoreVersion(restoreVersionTag);
       toast.success(t("mySkills.gitVersionRestoreSuccess", { tag: displaySnapshotLabel(restoreVersionTag) }));
       toast.info(t("backup.restoreSafetyPoint", { tag: displaySnapshotLabel(safetyTag) }));
-      await Promise.all([refreshGitStatus(), refreshVersions(), refreshManagedSkills()]);
+      await Promise.all([refreshGitStatus(), refreshVersions(), refreshManagedSkills(), refreshPresets()]);
       setRestoreVersionTag(null);
     } catch (error) {
       toast.error(mapGitError(error));
