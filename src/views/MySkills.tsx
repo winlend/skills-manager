@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Search,
   LayoutGrid,
@@ -27,7 +27,6 @@ import {
   FolderTree,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -50,6 +49,15 @@ import {
   skillMatchesSourceSearch,
   type NormalizedSource,
 } from "../lib/skillSource";
+import {
+  configureBatchWorkRunners,
+  enqueueChecks,
+  enqueueUpdates,
+  getBatchProgressSnapshot,
+  setBatchWorkNotify,
+  subscribeBatchProgress,
+} from "../lib/batchWorkQueue";
+
 import type {
   ManagedSkill,
   ToolInfo,
@@ -125,27 +133,6 @@ function centralDirName(skill: ManagedSkill) {
   return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
 }
 
-/** Parse received-byte counts from git/git2 progress lines. */
-function parseReceivedBytes(detail: string): number | null {
-  const kb = detail.match(/\(([\d.]+)\s*KB\)/i);
-  if (kb) return Math.round(parseFloat(kb[1]) * 1024);
-  const mib = detail.match(/\(([\d.]+)\s*MiB\)/i);
-  if (mib) return Math.round(parseFloat(mib[1]) * 1024 * 1024);
-  const mibPipe = detail.match(/([\d.]+)\s*MiB\s*\|/i);
-  if (mibPipe) return Math.round(parseFloat(mibPipe[1]) * 1024 * 1024);
-  const kibPipe = detail.match(/([\d.]+)\s*KiB\s*\|/i);
-  if (kibPipe) return Math.round(parseFloat(kibPipe[1]) * 1024);
-  const raw = detail.match(/(\d+)\s*bytes/i);
-  if (raw) return parseInt(raw[1], 10);
-  return null;
-}
-
-function formatByteRate(bps: number): string {
-  if (!Number.isFinite(bps) || bps < 0) return "—";
-  if (bps >= 1024 * 1024) return `${(bps / (1024 * 1024)).toFixed(1)} MB`;
-  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB`;
-  return `${Math.round(bps)} B`;
-}
 
 export function MySkills() {
   const { t } = useTranslation();
@@ -172,8 +159,6 @@ export function MySkills() {
   const [sourceMenuQuery, setSourceMenuQuery] = useState("");
   const sourceMenuRef = useRef<HTMLDivElement>(null);
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
-  const [groupCheckingKey, setGroupCheckingKey] = useState<string | null>(null);
-  const [scopedChecking, setScopedChecking] = useState(false);
   const [presetPickMode, setPresetPickMode] = useState<"add" | "remove" | null>(null);
   const [presetPickBusy, setPresetPickBusy] = useState(false);
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
@@ -191,33 +176,6 @@ export function MySkills() {
   const [checkingAll, setCheckingAll] = useState(false);
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
-  const [batchUpdating, setBatchUpdating] = useState(false);
-  /** Sequential batch progress: current item + counters (null when idle). */
-  const [batchProgress, setBatchProgress] = useState<{
-    mode: "update" | "check";
-    current: number;
-    total: number;
-    name: string;
-    waiting: number;
-  } | null>(null);
-  const [downloadInfo, setDownloadInfo] = useState<{
-    skillId: string;
-    detail: string;
-    speedLabel: string | null;
-  } | null>(null);
-  const downloadMeterRef = useRef<{ bytes: number; at: number } | null>(null);
-  const batchProgressRef = useRef<HTMLDivElement | null>(null);
-  /**
-   * Deduped work queue for update/check. Same skill id cannot enter twice while
-   * pending or in-flight; after finish it may be enqueued again (re-update OK).
-   * Tag/filter changes never clear the queue — only the worker drains it.
-   */
-  const workQueueRef = useRef<Array<{ id: string; mode: "update" | "check" }>>([]);
-  const workPendingRef = useRef<Set<string>>(new Set()); // `${mode}:${id}`
-  const workRunningRef = useRef(false);
-  const workStatsRef = useRef({ ok: 0, unchanged: 0, failed: 0, processed: 0 });
-  const skillsRef = useRef(skills);
-  skillsRef.current = skills;
   const skillDisplayNamesRef = useRef<Map<string, string>>(new Map());
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
@@ -244,47 +202,6 @@ export function MySkills() {
   // Skills with an unresolved sync conflict get a "needs attention" badge
   // that jumps to the Backup page (merge-engine design §4 UI).
 
-  // Git fetch/clone progress from update_skill (bytes → estimated rate)
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void listen<{ skill_id: string; phase: string; detail?: string }>(
-      "skill-update-progress",
-      (event) => {
-        if (cancelled) return;
-        const { skill_id, detail } = event.payload;
-        if (!detail) return;
-        const bytes = parseReceivedBytes(detail);
-        let speedLabel: string | null = null;
-        const now = performance.now();
-        if (bytes != null) {
-          const prev = downloadMeterRef.current;
-          if (prev && now > prev.at && bytes >= prev.bytes) {
-            const dt = (now - prev.at) / 1000;
-            if (dt >= 0.2) {
-              speedLabel = formatByteRate((bytes - prev.bytes) / dt);
-            }
-          }
-          if (prev && bytes + 1024 < prev.bytes) {
-            downloadMeterRef.current = { bytes, at: now };
-          } else if (!prev || now - prev.at >= 200) {
-            downloadMeterRef.current = { bytes, at: now };
-          }
-        }
-        setDownloadInfo((prevInfo) => ({
-          skillId: skill_id,
-          detail,
-          speedLabel: speedLabel ?? prevInfo?.speedLabel ?? null,
-        }));
-      }
-    ).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
 
   const [conflictIds, setConflictIds] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -365,22 +282,6 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
   skillDisplayNamesRef.current = skillDisplayNames;
-
-  useEffect(() => {
-    if (!(batchProgress || batchUpdating || scopedChecking)) return;
-    batchProgressRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [
-    batchProgress,
-    batchUpdating,
-    scopedChecking,
-    tagFilters,
-    sourceKeyFilter,
-    sourceFilters,
-    search,
-    filterMode,
-  ]);
-
-
 
   const sourceIndex = useMemo(() => buildSourceIndex(skills), [skills]);
 
@@ -808,192 +709,63 @@ export function MySkills() {
     await Promise.all([refreshManagedSkills(), refreshPresets()]);
   };
 
-  const displayNameOf = (skill: ManagedSkill) =>
-    skillDisplayNamesRef.current.get(skill.id) || skill.name;
+  // Module-level queue — progress survives filter changes (Banner in Layout)
+  const batchSnap = useSyncExternalStore(
+    subscribeBatchProgress,
+    getBatchProgressSnapshot,
+    getBatchProgressSnapshot
+  );
+  const batchUpdating = batchSnap.running;
+  const scopedChecking = batchSnap.running && batchSnap.mode === "check";
+  const activeUpdatingId =
+    updatingSkillId ||
+    (batchSnap.running && batchSnap.mode === "update" ? batchSnap.skillId : null);
+  const activeCheckingId =
+    checkingSkillId ||
+    (batchSnap.running && batchSnap.mode === "check" ? batchSnap.skillId : null);
 
-  const workKey = (mode: "update" | "check", id: string) => `${mode}:${id}`;
-
-  const publishQueueProgress = (
-    mode: "update" | "check",
-    name: string,
-  ) => {
-    const waiting = workQueueRef.current.filter((q) => q.mode === mode).length;
-    const processed = workStatsRef.current.processed;
-    // current item counts as processed+1; total = done + active + still waiting for this drain wave
-    const total = processed + 1 + waiting;
-    setBatchProgress({
-      mode,
-      current: processed + 1,
-      total: Math.max(total, 1),
-      name,
-      waiting,
+  useEffect(() => {
+    configureBatchWorkRunners({
+      updateSkill: (id) => api.updateSkill(id),
+      reimportLocal: (id) => api.reimportLocalSkill(id),
+      checkSkill: (id) => api.checkSkillUpdate(id, true),
+      refreshManagedSkills: () => refreshManagedSkills(),
+      displayName: (id, fallback) =>
+        skillDisplayNamesRef.current.get(id) || fallback,
     });
-  };
-
-  /**
-   * Drain deduped FIFO queue. Safe to call while running (no-op if already draining).
-   * New enqueueUpdates/enqueueChecks can append while this loop is mid-flight.
-   */
-  const drainWorkQueue = async () => {
-    if (workRunningRef.current) return;
-    workRunningRef.current = true;
-    workStatsRef.current = { ok: 0, unchanged: 0, failed: 0, processed: 0 };
-    setBatchUpdating(true);
-    setScopedChecking(true);
-    let lastMode: "update" | "check" | null = null;
-    try {
-      while (workQueueRef.current.length > 0) {
-        const job = workQueueRef.current.shift()!;
-        lastMode = job.mode;
-        const skill = skillsRef.current.find((s) => s.id === job.id);
-        const name = skill ? displayNameOf(skill) : job.id;
-        publishQueueProgress(job.mode, name);
-
-        if (job.mode === "update") {
-          setUpdatingSkillId(job.id);
-          setCheckingSkillId(null);
-          setDownloadInfo(null);
-          downloadMeterRef.current = null;
-        } else {
-          setCheckingSkillId(job.id);
-          setUpdatingSkillId(null);
-          setDownloadInfo(null);
-          downloadMeterRef.current = null;
+    setBatchWorkNotify({
+      onDone: (r) => {
+        if (r.mode === "check") {
+          toast.success(
+            t("mySkills.checkProgressDone", {
+              ok: r.ok,
+              total: r.processed,
+              failed: r.failed,
+            })
+          );
+        } else if (r.mode === "update") {
+          toast.success(
+            t("mySkills.batchProgressDone", {
+              ok: r.ok,
+              unchanged: r.unchanged,
+              failed: r.failed,
+            })
+          );
         }
+      },
+    });
+  }, [refreshManagedSkills, t]);
 
-        try {
-          if (!skill) {
-            workStatsRef.current.failed += 1;
-          } else if (job.mode === "check") {
-            await api.checkSkillUpdate(skill.id, true);
-            workStatsRef.current.ok += 1;
-          } else if (
-            skill.source_type === "local" ||
-            skill.source_type === "import"
-          ) {
-            await api.reimportLocalSkill(skill.id);
-            workStatsRef.current.ok += 1;
-          } else {
-            const result = await api.updateSkill(skill.id);
-            if (result.content_changed) workStatsRef.current.ok += 1;
-            else workStatsRef.current.unchanged += 1;
-          }
-        } catch {
-          workStatsRef.current.failed += 1;
-        } finally {
-          workPendingRef.current.delete(workKey(job.mode, job.id));
-          workStatsRef.current.processed += 1;
-        }
-      }
-
-      const { ok, unchanged, failed } = workStatsRef.current;
-      if (lastMode === "check") {
-        toast.success(
-          t("mySkills.checkProgressDone", {
-            ok,
-            total: workStatsRef.current.processed,
-            failed,
-          })
-        );
-      } else if (lastMode === "update") {
-        toast.success(
-          t("mySkills.batchProgressDone", { ok, unchanged, failed })
-        );
-      }
-    } finally {
-      setUpdatingSkillId(null);
-      setCheckingSkillId(null);
-      setBatchProgress(null);
-      setDownloadInfo(null);
-      downloadMeterRef.current = null;
-      workRunningRef.current = false;
-      setBatchUpdating(false);
-      setScopedChecking(false);
-      setGroupCheckingKey(null);
-      // If something was enqueued after we exited the while but before clearing running, re-drain
-      if (workQueueRef.current.length > 0) {
-        void drainWorkQueue();
-        return;
-      }
-      await refreshManagedSkills();
-    }
-  };
-
-  /**
-   * Enqueue skills for update. Dedupes by id while pending/in-flight.
-   * Allows repeat enqueue after a skill finishes (re-update OK).
-   * Does not lock tag/filter UI.
-   */
-  const enqueueUpdates = (targetSkills: ManagedSkill[]) => {
-    const candidates = targetSkills.filter(
-      (s) =>
-        s.source_type === "git" ||
-        s.source_type === "skillssh" ||
-        ((s.source_type === "local" || s.source_type === "import") &&
-          !!s.source_ref)
-    );
-    if (candidates.length === 0) {
-      toast.info(t("mySkills.noUpdateableInScope"));
-      return;
-    }
-    let added = 0;
-    let skipped = 0;
-    for (const skill of candidates) {
-      const key = workKey("update", skill.id);
-      if (workPendingRef.current.has(key)) {
-        skipped += 1;
-        continue;
-      }
-      workPendingRef.current.add(key);
-      workQueueRef.current.push({ id: skill.id, mode: "update" });
-      added += 1;
-    }
+  const notifyEnqueue = (added: number, skipped: number) => {
     if (added === 0) {
       toast.info(t("mySkills.batchNothingNew"));
       return;
     }
     if (skipped > 0) {
       toast.info(t("mySkills.batchQueued", { added, skipped }));
-    } else if (workRunningRef.current) {
+    } else if (batchSnap.running) {
       toast.info(t("mySkills.batchQueuedOnly", { added }));
     }
-    void drainWorkQueue();
-  };
-
-  const enqueueChecks = (targetSkills: ManagedSkill[]) => {
-    const candidates = targetSkills.filter(
-      (s) =>
-        s.source_type === "git" ||
-        s.source_type === "skillssh" ||
-        ((s.source_type === "local" || s.source_type === "import") &&
-          !!s.source_ref)
-    );
-    if (candidates.length === 0) {
-      toast.info(t("mySkills.noUpdateableInScope"));
-      return;
-    }
-    let added = 0;
-    let skipped = 0;
-    for (const skill of candidates) {
-      const key = workKey("check", skill.id);
-      if (workPendingRef.current.has(key)) {
-        skipped += 1;
-        continue;
-      }
-      workPendingRef.current.add(key);
-      workQueueRef.current.push({ id: skill.id, mode: "check" });
-      added += 1;
-    }
-    if (added === 0) {
-      toast.info(t("mySkills.batchNothingNew"));
-      return;
-    }
-    if (skipped > 0) {
-      toast.info(t("mySkills.batchQueued", { added, skipped }));
-    } else if (workRunningRef.current) {
-      toast.info(t("mySkills.batchQueuedOnly", { added }));
-    }
-    void drainWorkQueue();
   };
 
   const handleBatchRefresh = () => {
@@ -1003,7 +775,8 @@ export function MySkills() {
     );
     const targets =
       updatable.length > 0 ? updatable : selected.filter((s) => canRefresh(s));
-    enqueueUpdates(targets);
+    const r = enqueueUpdates(targets);
+    notifyEnqueue(r.added, r.skipped);
   };
 
   /** Toolbar update count is scoped to current Library filters. */
@@ -1011,7 +784,8 @@ export function MySkills() {
     const updatableSkills = filtered.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    enqueueUpdates(updatableSkills);
+    const r = enqueueUpdates(updatableSkills);
+    notifyEnqueue(r.added, r.skipped);
   };
 
   const handleTogglePreset = async (skill: ManagedSkill) => {
@@ -1055,26 +829,21 @@ export function MySkills() {
   };
 
   const handleScopedCheckUpdates = (targetSkills: ManagedSkill[]) => {
-    enqueueChecks(targetSkills);
+    const r = enqueueChecks(targetSkills);
+    notifyEnqueue(r.added, r.skipped);
   };
 
-  const handleGroupCheckUpdates = (
-    groupSkills: ManagedSkill[],
-    key: string
-  ) => {
-    setGroupCheckingKey(key);
-    enqueueChecks(groupSkills);
-    // clear group spinner when queue idle — next tick after enqueue
-    queueMicrotask(() => {
-      if (!workRunningRef.current) setGroupCheckingKey(null);
-    });
+  const handleGroupCheckUpdates = (groupSkills: ManagedSkill[]) => {
+    const r = enqueueChecks(groupSkills);
+    notifyEnqueue(r.added, r.skipped);
   };
 
   const handleGroupUpdateAvailable = (groupSkills: ManagedSkill[]) => {
     const updatable = groupSkills.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    enqueueUpdates(updatable);
+    const r = enqueueUpdates(updatable);
+    notifyEnqueue(r.added, r.skipped);
   };
 
   const handleBatchAddToPreset = async (presetId: string) => {
@@ -1427,19 +1196,6 @@ export function MySkills() {
           <span className="app-badge">
             {skills.length}
           </span>
-          {(batchUpdating || scopedChecking || batchProgress) && (
-            <span className="inline-flex max-w-[min(420px,50vw)] items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-0.5 text-[12px] font-medium text-accent-light">
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-              <span className="truncate">
-                {batchProgress
-                  ? `${batchProgress.current}/${batchProgress.total} · ${batchProgress.name}`
-                  : t("mySkills.batchBackgroundHint")}
-              </span>
-              {downloadInfo?.speedLabel && (
-                <span className="shrink-0 opacity-90">{downloadInfo.speedLabel}/s</span>
-              )}
-            </span>
-          )}
         </h1>
       </div>
 
@@ -1781,77 +1537,6 @@ export function MySkills() {
         )}
       </div>
 
-      {/* In-flow progress under filters — does not cover toolbar; survives filter changes (queue still runs). */}
-      {(batchProgress || batchUpdating || scopedChecking) && (
-        <div
-          ref={batchProgressRef}
-          className="shrink-0 rounded-lg border border-accent/40 bg-accent-bg/30 px-3 py-2"
-        >
-          <div className="mb-1 flex items-center justify-between gap-2 text-[12px] text-secondary">
-            <span className="min-w-0 truncate font-medium">
-              {batchProgress
-                ? batchProgress.mode === "check"
-                  ? t("mySkills.checkProgress", {
-                      current: batchProgress.current,
-                      total: batchProgress.total,
-                      name: batchProgress.name,
-                    })
-                  : t("mySkills.updateProgress", {
-                      current: batchProgress.current,
-                      total: batchProgress.total,
-                      name: batchProgress.name,
-                    })
-                : t("mySkills.batchBackgroundHint")}
-            </span>
-            {batchProgress && (
-              <span className="shrink-0 text-muted">
-                {batchProgress.current}/{batchProgress.total}
-                {batchProgress.waiting > 0
-                  ? ` · ${t("mySkills.queueRemaining", { n: batchProgress.waiting })}`
-                  : ""}
-              </span>
-            )}
-          </div>
-          {batchProgress && (
-            <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
-              <div
-                className="h-full rounded-full bg-accent transition-all duration-300"
-                style={{
-                  width: `${Math.round(
-                    (batchProgress.current / Math.max(batchProgress.total, 1)) * 100
-                  )}%`,
-                }}
-              />
-            </div>
-          )}
-          {batchProgress &&
-            updatingSkillId &&
-            !filtered.some((s) => s.id === updatingSkillId) && (
-              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                {t("mySkills.batchRunningOutsideFilter", {
-                  name: batchProgress.name,
-                })}
-              </p>
-            )}
-          {downloadInfo &&
-            (batchProgress?.mode === "update" || batchUpdating) &&
-            (!updatingSkillId || downloadInfo.skillId === updatingSkillId) && (
-              <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
-                <span className="min-w-0 truncate font-mono">
-                  {downloadInfo.detail}
-                </span>
-                {downloadInfo.speedLabel && (
-                  <span className="shrink-0 font-semibold text-accent-light">
-                    {downloadInfo.speedLabel}/s
-                  </span>
-                )}
-              </div>
-            )}
-          <p className="mt-1 text-[10px] text-muted">
-            {t("mySkills.batchBackgroundHint")}
-          </p>
-        </div>
-      )}
 
       {isMultiSelect && (
         <MultiSelectToolbar
@@ -1980,13 +1665,13 @@ export function MySkills() {
                       {refreshableInGroup > 0 && (
                         <button
                           type="button"
-                          onClick={() => handleGroupCheckUpdates(group.skills, group.meta!.key)}
+                          onClick={() => handleGroupCheckUpdates(group.skills)}
                           className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-surface-hover hover:text-secondary"
                         >
                           <RefreshCw
                             className={cn(
                               "h-3 w-3",
-                              groupCheckingKey === group.meta.key && "animate-spin"
+                              scopedChecking && "animate-spin"
                             )}
                           />
                           {t("mySkills.sourceGroup.checkUpdates")}
@@ -2056,20 +1741,20 @@ export function MySkills() {
                     {dragHandle}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleCheckUpdate(skill); }}
-                      disabled={checkingSkillId === skill.id}
+                      disabled={activeCheckingId === skill.id}
                       className="rounded p-1 text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
                       title={t("mySkills.updateActions.check")}
                     >
-                      <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />
+                      <RefreshCw className={cn("h-3.5 w-3.5", activeCheckingId === skill.id && "animate-spin")} />
                     </button>
                     {canRefresh(skill) ? (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleRefreshSkill(skill); }}
-                        disabled={updatingSkillId === skill.id}
+                        disabled={activeUpdatingId === skill.id}
                         className="rounded p-1 text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
                         title={refreshLabel(skill)}
                       >
-                        <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />
+                        <RotateCcw className={cn("h-3.5 w-3.5", activeUpdatingId === skill.id && "animate-spin")} />
                       </button>
                     ) : null}
                     <DeleteSkillButton
@@ -2127,14 +1812,14 @@ export function MySkills() {
                           <>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleRelinkSource(skill); }}
-                              disabled={updatingSkillId === skill.id}
+                              disabled={activeUpdatingId === skill.id}
                               className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
                             >
                               {t("mySkills.updateActions.relink")}
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleDetachSource(skill); }}
-                              disabled={updatingSkillId === skill.id}
+                              disabled={activeUpdatingId === skill.id}
                               className="rounded-full border border-border-subtle px-2 py-0.5 text-[12px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
                             >
                               {t("mySkills.updateActions.detachSource")}
@@ -2358,14 +2043,14 @@ export function MySkills() {
                     <>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleRelinkSource(skill); }}
-                        disabled={updatingSkillId === skill.id}
+                        disabled={activeUpdatingId === skill.id}
                         className="rounded px-2 py-0.5 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
                       >
                         {t("mySkills.updateActions.relink")}
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDetachSource(skill); }}
-                        disabled={updatingSkillId === skill.id}
+                        disabled={activeUpdatingId === skill.id}
                         className="rounded px-2 py-0.5 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
                       >
                         {t("mySkills.updateActions.detachSource")}
@@ -2386,20 +2071,20 @@ export function MySkills() {
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); handleCheckUpdate(skill); }}
-                    disabled={checkingSkillId === skill.id}
+                    disabled={activeCheckingId === skill.id}
                     className="rounded p-0.5 text-muted transition-colors hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
                     title={t("mySkills.updateActions.check")}
                   >
-                    <RefreshCw className={cn("h-3.5 w-3.5", checkingSkillId === skill.id && "animate-spin")} />
+                    <RefreshCw className={cn("h-3.5 w-3.5", activeCheckingId === skill.id && "animate-spin")} />
                   </button>
                   {canRefresh(skill) ? (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleRefreshSkill(skill); }}
-                      disabled={updatingSkillId === skill.id}
+                      disabled={activeUpdatingId === skill.id}
                       className="rounded p-0.5 text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
                       title={refreshLabel(skill)}
                     >
-                      <RotateCcw className={cn("h-3.5 w-3.5", updatingSkillId === skill.id && "animate-spin")} />
+                      <RotateCcw className={cn("h-3.5 w-3.5", activeUpdatingId === skill.id && "animate-spin")} />
                     </button>
                   ) : null}
                   <DeleteSkillButton
