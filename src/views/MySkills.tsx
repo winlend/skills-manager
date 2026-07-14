@@ -169,6 +169,13 @@ export function MySkills() {
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
   const [batchUpdating, setBatchUpdating] = useState(false);
+  /** Sequential batch progress: current item + counters (null when idle). */
+  const [batchProgress, setBatchProgress] = useState<{
+    mode: "update" | "check";
+    current: number;
+    total: number;
+    name: string;
+  } | null>(null);
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
@@ -698,54 +705,110 @@ export function MySkills() {
     await Promise.all([refreshManagedSkills(), refreshPresets()]);
   };
 
-  const handleBatchRefresh = async () => {
-    const refreshableSkills = skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill));
-    if (refreshableSkills.length === 0) return;
+  const displayNameOf = (skill: ManagedSkill) =>
+    skillDisplayNames.get(skill.id) || skill.name;
 
+  /**
+   * Sequential per-skill update with live progress.
+   * Used for selection / filtered / group scope.
+   */
+  const runSequentialUpdates = async (targetSkills: ManagedSkill[]) => {
+    const list = targetSkills.filter((s) => canRefresh(s));
+    if (list.length === 0) {
+      toast.info(t("mySkills.noUpdateableInScope"));
+      return;
+    }
     setBatchUpdating(true);
+    let ok = 0;
+    let unchanged = 0;
+    let failed = 0;
     try {
-      const result = await api.batchUpdateSkills(refreshableSkills.map((skill) => skill.id));
-      if (result.refreshed > 0) {
-        toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
+      for (let i = 0; i < list.length; i++) {
+        const skill = list[i];
+        setBatchProgress({
+          mode: "update",
+          current: i + 1,
+          total: list.length,
+          name: displayNameOf(skill),
+        });
+        setUpdatingSkillId(skill.id);
+        try {
+          if (skill.source_type === "local" || skill.source_type === "import") {
+            await api.reimportLocalSkill(skill.id);
+            ok += 1;
+          } else {
+            const result = await api.updateSkill(skill.id);
+            if (result.content_changed) ok += 1;
+            else unchanged += 1;
+          }
+        } catch {
+          failed += 1;
+        }
       }
-      if (result.unchanged > 0) {
-        toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
-      }
-      if (result.failed.length > 0) {
-        toast.error(t("mySkills.batchUpdateFailed", { count: result.failed.length }));
-      }
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
+      toast.success(
+        t("mySkills.batchProgressDone", { ok, unchanged, failed })
+      );
     } finally {
+      setUpdatingSkillId(null);
+      setBatchProgress(null);
       await refreshManagedSkills();
       setBatchUpdating(false);
     }
   };
 
-  const handleUpdateAvailableSkills = async () => {
-    const updatableSkills = skills.filter(
+  const runSequentialChecks = async (targetSkills: ManagedSkill[]) => {
+    const list = targetSkills.filter((s) => canRefresh(s));
+    if (list.length === 0) {
+      toast.info(t("mySkills.noUpdateableInScope"));
+      return;
+    }
+    setScopedChecking(true);
+    let ok = 0;
+    let failed = 0;
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const skill = list[i];
+        setBatchProgress({
+          mode: "check",
+          current: i + 1,
+          total: list.length,
+          name: displayNameOf(skill),
+        });
+        setCheckingSkillId(skill.id);
+        try {
+          await api.checkSkillUpdate(skill.id, true);
+          ok += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      toast.success(
+        t("mySkills.checkProgressDone", { ok, total: list.length, failed })
+      );
+    } finally {
+      setCheckingSkillId(null);
+      setBatchProgress(null);
+      await refreshManagedSkills();
+      setScopedChecking(false);
+    }
+  };
+
+  const handleBatchRefresh = async () => {
+    const selected = skills.filter((skill) => selectedIds.has(skill.id));
+    const updatable = selected.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    if (updatableSkills.length === 0) return;
+    const targets =
+      updatable.length > 0 ? updatable : selected.filter((s) => canRefresh(s));
+    await runSequentialUpdates(targets);
+  };
 
-    setBatchUpdating(true);
-    try {
-      const result = await api.batchUpdateSkills(updatableSkills.map((skill) => skill.id));
-      if (result.refreshed > 0) {
-        toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
-      }
-      if (result.unchanged > 0) {
-        toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
-      }
-      if (result.failed.length > 0) {
-        toast.error(t("mySkills.batchUpdateFailed", { count: result.failed.length }));
-      }
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      await refreshManagedSkills();
-      setBatchUpdating(false);
-    }
+  /** Toolbar update count is scoped to current Library filters. */
+  const handleUpdateAvailableSkills = async () => {
+    const updatableSkills = filtered.filter(
+      (skill) => skill.update_status === "update_available" && canRefresh(skill)
+    );
+    await runSequentialUpdates(updatableSkills);
   };
 
   const handleTogglePreset = async (skill: ManagedSkill) => {
@@ -762,6 +825,7 @@ export function MySkills() {
   };
 
   const handleCheckAllUpdates = async () => {
+    // Whole-library check stays one backend call (no per-item progress).
     setCheckingAll(true);
     try {
       await api.checkAllSkillUpdates(true);
@@ -788,35 +852,16 @@ export function MySkills() {
   };
 
   const handleScopedCheckUpdates = async (targetSkills: ManagedSkill[]) => {
-    const refreshable = targetSkills.filter((skill) => canRefresh(skill));
-    if (refreshable.length === 0) {
-      toast.info(t("mySkills.noUpdateableInScope"));
-      return;
-    }
-    setScopedChecking(true);
-    let failed = 0;
-    try {
-      for (const skill of refreshable) {
-        try {
-          await api.checkSkillUpdate(skill.id, true);
-        } catch {
-          failed += 1;
-        }
-      }
-      toast.success(t("mySkills.scopedCheckDone", { count: refreshable.length - failed }));
-      if (failed > 0) {
-        toast.error(t("mySkills.batchUpdateFailed", { count: failed }));
-      }
-    } finally {
-      await refreshManagedSkills();
-      setScopedChecking(false);
-    }
+    await runSequentialChecks(targetSkills);
   };
 
-  const handleGroupCheckUpdates = async (groupSkills: ManagedSkill[], key: string) => {
+  const handleGroupCheckUpdates = async (
+    groupSkills: ManagedSkill[],
+    key: string
+  ) => {
     setGroupCheckingKey(key);
     try {
-      await handleScopedCheckUpdates(groupSkills);
+      await runSequentialChecks(groupSkills);
     } finally {
       setGroupCheckingKey(null);
     }
@@ -826,28 +871,7 @@ export function MySkills() {
     const updatable = groupSkills.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    if (updatable.length === 0) {
-      toast.info(t("mySkills.noUpdateableInScope"));
-      return;
-    }
-    setBatchUpdating(true);
-    try {
-      const result = await api.batchUpdateSkills(updatable.map((s) => s.id));
-      if (result.refreshed > 0) {
-        toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
-      }
-      if (result.unchanged > 0) {
-        toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
-      }
-      if (result.failed.length > 0) {
-        toast.error(t("mySkills.batchUpdateFailed", { count: result.failed.length }));
-      }
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      await refreshManagedSkills();
-      setBatchUpdating(false);
-    }
+    await runSequentialUpdates(updatable);
   };
 
   const handleBatchAddToPreset = async (presetId: string) => {
@@ -1139,14 +1163,28 @@ export function MySkills() {
     () => skills.some((skill) => selectedIds.has(skill.id) && canRefresh(skill)),
     [skills, selectedIds]
   );
+  // Scoped to current Library filters (search x channel x source_key x tags x preset mode)
   const availableUpdateCount = useMemo(
-    () => skills.filter((skill) => skill.update_status === "update_available" && canRefresh(skill)).length,
+    () =>
+      filtered.filter(
+        (skill) => skill.update_status === "update_available" && canRefresh(skill)
+      ).length,
+    [filtered]
+  );
+  const libraryWideUpdateCount = useMemo(
+    () =>
+      skills.filter(
+        (skill) => skill.update_status === "update_available" && canRefresh(skill)
+      ).length,
     [skills]
   );
-  const refreshableSelectedCount = useMemo(
-    () => skills.filter((skill) => selectedIds.has(skill.id) && canRefresh(skill)).length,
-    [skills, selectedIds]
-  );
+  const refreshableSelectedCount = useMemo(() => {
+    const selected = skills.filter(
+      (skill) => selectedIds.has(skill.id) && canRefresh(skill)
+    );
+    const updatable = selected.filter((s) => s.update_status === "update_available");
+    return updatable.length > 0 ? updatable.length : selected.length;
+  }, [skills, selectedIds]);
 
   const sourceTypeLabel = (skill: ManagedSkill) =>
     skill.source_type === "skillssh" ? "skills.sh" : skill.source_type;
@@ -1254,10 +1292,22 @@ export function MySkills() {
           <button
             onClick={handleUpdateAvailableSkills}
             disabled={batchUpdating || availableUpdateCount === 0}
+            title={
+              hasActiveFilters
+                ? t("mySkills.updateFiltered", { count: availableUpdateCount }) +
+                  (libraryWideUpdateCount !== availableUpdateCount
+                    ? ` / ${t("mySkills.updateActions.updateAvailable", { count: libraryWideUpdateCount })}`
+                    : "")
+                : undefined
+            }
             className="mr-2 inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium text-accent-light transition-colors hover:bg-accent-bg disabled:opacity-50"
           >
             <RotateCcw className={cn("h-3.5 w-3.5", batchUpdating && "animate-spin")} />
-            {t("mySkills.updateActions.updateAvailable", { count: availableUpdateCount })}
+            {hasActiveFilters
+              ? t("mySkills.updateFiltered", { count: availableUpdateCount })
+              : t("mySkills.updateActions.updateAvailable", {
+                  count: availableUpdateCount,
+                })}
           </button>
           <button
             onClick={() => setViewMode("grid")}
@@ -1516,6 +1566,39 @@ export function MySkills() {
         )}
       </div>
 
+      {batchProgress && (
+        <div className="mx-1 mb-1 rounded-lg border border-accent/30 bg-accent-bg/40 px-3 py-2">
+          <div className="mb-1 flex items-center justify-between gap-2 text-[12px] text-secondary">
+            <span className="min-w-0 truncate font-medium">
+              {batchProgress.mode === "check"
+                ? t("mySkills.checkProgress", {
+                    current: batchProgress.current,
+                    total: batchProgress.total,
+                    name: batchProgress.name,
+                  })
+                : t("mySkills.updateProgress", {
+                    current: batchProgress.current,
+                    total: batchProgress.total,
+                    name: batchProgress.name,
+                  })}
+            </span>
+            <span className="shrink-0 text-muted">
+              {batchProgress.current}/{batchProgress.total}
+            </span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
+            <div
+              className="h-full rounded-full bg-accent transition-all duration-300"
+              style={{
+                width: `${Math.round(
+                  (batchProgress.current / Math.max(batchProgress.total, 1)) * 100
+                )}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {isMultiSelect && (
         <MultiSelectToolbar
           selectedCount={selectedIds.size}
@@ -1664,7 +1747,9 @@ export function MySkills() {
                           className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-light hover:bg-accent-bg disabled:opacity-50"
                         >
                           <RotateCcw className={cn("h-3 w-3", batchUpdating && "animate-spin")} />
-                          {t("mySkills.sourceGroup.updateAvailable")}
+                          {t("mySkills.sourceGroup.updateAvailable", {
+                            count: updatableInGroup,
+                          })}
                         </button>
                       )}
                       <button

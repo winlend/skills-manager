@@ -447,7 +447,7 @@
     "sourceGroup": {
       "checkUpdates": "Check updates",
       "selectAll": "Select all in group",
-      "updateAvailable": "Update available in group",
+      "updateAvailable": "Update available ({{count}})",
       "collapsed": "Collapsed",
       "expanded": "Expanded"
     },
@@ -465,7 +465,12 @@
     "batchPresetRemoved": "Removed {{count}} skill(s) from preset",
     "batchPresetFailed": "{{count}} skill(s) failed",
     "scopedCheckDone": "Checked updates for {{count}} skill(s)",
-    "noUpdateableInScope": "No updatable skills in this selection"
+    "noUpdateableInScope": "No updatable skills in this selection",
+    "updateProgress": "Updating {{current}}/{{total}}: {{name}}",
+    "checkProgress": "Checking {{current}}/{{total}}: {{name}}",
+    "batchProgressDone": "Done: {{ok}} updated, {{unchanged}} unchanged, {{failed}} failed",
+    "checkProgressDone": "Checked {{ok}}/{{total}} ({{failed}} failed)",
+    "updateFiltered": "Update filtered ({{count}})"
   },
   "install": {
     "title": "Install Skills",

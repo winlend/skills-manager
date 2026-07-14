@@ -404,7 +404,7 @@
     "sourceGroup": {
       "checkUpdates": "檢查更新",
       "selectAll": "全選本組",
-      "updateAvailable": "更新本組可更新項",
+      "updateAvailable": "更新可更新項（{{count}}）",
       "collapsed": "已摺疊",
       "expanded": "已展開"
     },
@@ -422,7 +422,12 @@
     "batchPresetRemoved": "已從 Preset 移除 {{count}} 個 Skill",
     "batchPresetFailed": "{{count}} 個 Skill 操作失敗",
     "scopedCheckDone": "已檢查 {{count}} 個 Skill 的更新",
-    "noUpdateableInScope": "目前範圍內沒有可更新的 Skills"
+    "noUpdateableInScope": "目前範圍內沒有可更新的 Skills",
+    "updateProgress": "正在更新 {{current}}/{{total}}：{{name}}",
+    "checkProgress": "正在檢查 {{current}}/{{total}}：{{name}}",
+    "batchProgressDone": "完成：更新 {{ok}}，未變 {{unchanged}}，失敗 {{failed}}",
+    "checkProgressDone": "已檢查 {{ok}}/{{total}}（失敗 {{failed}}）",
+    "updateFiltered": "更新篩選結果（{{count}}）"
   },
   "install": {
     "title": "安裝 Skills",
