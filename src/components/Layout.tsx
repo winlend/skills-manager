@@ -1,11 +1,14 @@
 import { useEffect } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./Sidebar";
 import { StatusBanner } from "./StatusBanner";
 import { CommandPalette } from "./CommandPalette";
+import { BatchProgressBanner } from "./BatchProgressBanner";
 import { useApp } from "../context/AppContext";
 import { useTranslation } from "react-i18next";
 import { useDragWindow } from "../hooks/useDragWindow";
+import { reportDownloadProgress } from "../lib/batchWorkQueue";
 
 export function Layout() {
   const { t } = useTranslation();
@@ -13,7 +16,6 @@ export function Layout() {
   const onDrag = useDragWindow();
   const navigate = useNavigate();
 
-  // Cmd+, to open Settings
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ",") {
@@ -33,9 +35,24 @@ export function Layout() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigate, refreshAppData]);
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ skill_id: string; phase: string; detail?: string }>(
+      "skill-update-progress",
+      (event) => {
+        const { skill_id, detail } = event.payload;
+        if (detail) reportDownloadProgress(skill_id, detail);
+      }
+    ).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   return (
     <div className="relative flex h-full w-full overflow-hidden bg-background text-primary">
-      {/* Full-width top drag bar — spans sidebar + content, with bottom divider */}
       <div
         onMouseDown={onDrag}
         className="absolute inset-x-0 top-0 z-50 h-[28px] border-b border-border-subtle bg-bg-secondary"
@@ -54,6 +71,7 @@ export function Layout() {
                 tone="danger"
               />
             ) : null}
+            <BatchProgressBanner />
             <Outlet />
           </div>
         </div>

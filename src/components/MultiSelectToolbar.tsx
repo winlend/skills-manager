@@ -1,4 +1,4 @@
-import { Trash2, CheckCircle2, Circle, RotateCcw, Tag, Download, Upload } from "lucide-react";
+import { Trash2, CheckCircle2, Circle, RotateCcw, Tag, Download, Upload, FolderPlus, FolderMinus } from "lucide-react";
 import { cn } from "../utils";
 
 interface MultiSelectToolbarLabels {
@@ -14,6 +14,9 @@ interface MultiSelectToolbarLabels {
   deselectAll: string;
   cancel: string;
   editTags?: string;
+  addToPreset?: string;
+  removeFromPreset?: string;
+  checkUpdates?: string;
 }
 
 interface MultiSelectToolbarProps {
@@ -27,6 +30,7 @@ interface MultiSelectToolbarProps {
   updating?: boolean;
   updatingProject?: boolean;
   updatingCenter?: boolean;
+  checking?: boolean;
   labels: MultiSelectToolbarLabels;
   onUpdate?: () => void;
   onUpdateProject?: () => void;
@@ -36,6 +40,9 @@ interface MultiSelectToolbarProps {
   onSelectAll: () => void;
   onCancel: () => void;
   onEditTags?: () => void;
+  onAddToPreset?: () => void;
+  onRemoveFromPreset?: () => void;
+  onCheckUpdates?: () => void;
 }
 
 export function MultiSelectToolbar({
@@ -49,6 +56,7 @@ export function MultiSelectToolbar({
   updating = false,
   updatingProject = false,
   updatingCenter = false,
+  checking = false,
   labels,
   onUpdate,
   onUpdateProject,
@@ -58,19 +66,32 @@ export function MultiSelectToolbar({
   onSelectAll,
   onCancel,
   onEditTags,
+  onAddToPreset,
+  onRemoveFromPreset,
+  onCheckUpdates,
 }: MultiSelectToolbarProps) {
   return (
-    <div className="flex items-center gap-2 px-1 py-1.5">
+    <div className="flex flex-wrap items-center gap-2 px-1 py-1.5">
       <span className="text-[13px] text-muted">
         {selectedCount > 0 ? labels.selected : labels.hint}
       </span>
       {selectedCount > 0 && (
         <>
+          {onCheckUpdates && labels.checkUpdates && (
+            <button
+              onClick={onCheckUpdates}
+              className="inline-flex items-center gap-1.5 rounded-md bg-surface-active px-2.5 py-1 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover"
+              title={checking ? "Queue more if not already pending" : undefined}
+            >
+              <RotateCcw className={cn("h-3.5 w-3.5", checking && "animate-spin")} />
+              {labels.checkUpdates}
+            </button>
+          )}
           {anyUpdatable && labels.update && onUpdate && (
             <button
               onClick={onUpdate}
-              disabled={updating}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-[13px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-[13px] font-medium text-white transition-colors hover:opacity-90"
+              title={updating ? "Queue more if not already pending" : undefined}
             >
               <RotateCcw className={cn("h-3.5 w-3.5", updating && "animate-spin")} />
               {labels.update}
@@ -94,6 +115,24 @@ export function MultiSelectToolbar({
             >
               <Upload className={cn("h-3.5 w-3.5", updatingCenter && "animate-spin")} />
               {labels.updateCenter}
+            </button>
+          )}
+          {onAddToPreset && labels.addToPreset && (
+            <button
+              onClick={onAddToPreset}
+              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600/90 px-2.5 py-1 text-[13px] font-medium text-white hover:bg-emerald-500 transition-colors"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+              {labels.addToPreset}
+            </button>
+          )}
+          {onRemoveFromPreset && labels.removeFromPreset && (
+            <button
+              onClick={onRemoveFromPreset}
+              className="inline-flex items-center gap-1.5 rounded-md bg-orange-600/90 px-2.5 py-1 text-[13px] font-medium text-white hover:bg-orange-500 transition-colors"
+            >
+              <FolderMinus className="h-3.5 w-3.5" />
+              {labels.removeFromPreset}
             </button>
           )}
           {onEditTags && labels.editTags && (

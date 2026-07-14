@@ -1173,6 +1173,7 @@ pub async fn update_skill(
     skill_id: String,
     store: State<'_, Arc<SkillStore>>,
     cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    app_handle: tauri::AppHandle,
 ) -> Result<UpdateSkillResult, AppError> {
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
@@ -1180,10 +1181,30 @@ pub async fn update_skill(
     let cancel_key = format!("update:{}", skill_id);
     let cancel = registry.register(&cancel_key);
     let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
+    let skill_id_for_progress = skill_id.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let outcome =
-            update_git_skill_internal(&store, &skill_id, proxy_url.as_deref(), Some(&cancel));
+        use tauri::Emitter;
+        let app_for_progress = app_handle.clone();
+        let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
+            app_for_progress
+                .emit(
+                    "skill-update-progress",
+                    serde_json::json!({
+                        "skill_id": skill_id_for_progress,
+                        "phase": "cloning",
+                        "detail": msg,
+                    }),
+                )
+                .ok();
+        });
+        let outcome = update_git_skill_internal_with_progress(
+            &store,
+            &skill_id,
+            proxy_url.as_deref(),
+            Some(&cancel),
+            Some(progress_cb),
+        );
         log_update_outcome(&store, &skill_id, "git", outcome.as_ref());
         outcome
     })
@@ -1456,6 +1477,17 @@ pub fn update_git_skill_internal(
     proxy_url: Option<&str>,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<UpdateSkillResult, AppError> {
+    update_git_skill_internal_with_progress(store, skill_id, proxy_url, cancel, None)
+}
+
+/// Same as [`update_git_skill_internal`], with optional clone progress lines for the UI.
+pub fn update_git_skill_internal_with_progress(
+    store: &SkillStore,
+    skill_id: &str,
+    proxy_url: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+    on_progress: Option<git_fetcher::ProgressCallback>,
+) -> Result<UpdateSkillResult, AppError> {
     let skill = store
         .get_skill_by_id(skill_id)
         .map_err(AppError::db)?
@@ -1489,11 +1521,16 @@ pub fn update_git_skill_internal(
         .update_skill_update_status(skill_id, "updating")
         .map_err(AppError::db)?;
 
-    let temp_dir = git_fetcher::clone_repo_ref(
+    if let Some(ref cb) = on_progress {
+        cb("Fetching remote…");
+    }
+
+    let temp_dir = git_fetcher::clone_repo_ref_with_progress(
         &git_source.clone_url,
         git_source.branch.as_deref(),
         cancel,
         proxy_url,
+        on_progress,
     )
     .map_err(AppError::classify_git_error)?;
     let update_result = (|| -> Result<bool, AppError> {
