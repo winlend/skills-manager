@@ -4,51 +4,52 @@
   Sync upstream (if changed) and build a personal Windows skills-manager.exe.
 
 .DESCRIPTION
-  For solo use of the winlend fork:
+  Solo-use helper for the winlend fork:
     1) git fetch upstream
-    2) if upstream/main has new commits → merge into main and current feature branch
+    2) if upstream/main has new commits → merge into main, then into your branch
+       On CONFLICT: script STOPS immediately. Official skills-manager.exe is never
+       touched. You resolve git conflicts manually, then re-run.
     3) tauri build (without updater signature artifacts)
-    4) optional: backup + copy exe into the official install dir
+    4) optional: copy as a NEW filename beside the official install (default:
+       skills-manager-winlend.exe — does NOT overwrite skills-manager.exe)
 
-  Official install on this machine (from Start Menu shortcut):
+  Official install (this machine):
     D:\Program Files\skills-manager\skills-manager.exe
 
-  App data stays under %LOCALAPPDATA%\com.agentskills.desktop (same identifier),
-  so replacing the exe keeps your library/presets.
+  App data: %LOCALAPPDATA%\com.agentskills.desktop (shared with official)
 
 .PARAMETER Deploy
-  After a successful build, overwrite the install-dir exe (requires write access;
-  usually "Run as Administrator" if install is under Program Files).
+  Copy built exe into InstallDir under DeployName (side-by-side, not replace).
+
+.PARAMETER DeployName
+  Filename for your fork build. Default: skills-manager-winlend.exe
+  Official skills-manager.exe is never overwritten by this script.
 
 .PARAMETER InstallDir
-  Target install directory. Default: D:\Program Files\skills-manager
+  Directory for the side-by-side copy. Default: D:\Program Files\skills-manager
+
+.PARAMETER CreateShortcut
+  Create a Desktop shortcut to the deployed fork exe.
 
 .PARAMETER Branch
   Working branch to merge upstream into (default: current branch).
 
-.PARAMETER SkipSync
-  Only build; do not fetch/merge upstream.
-
-.PARAMETER SkipBuild
-  Only sync; do not build.
-
-.PARAMETER DryRun
-  Print what would happen; no merge/build/deploy.
+.PARAMETER SkipSync / SkipBuild / DryRun
+  See examples.
 
 .EXAMPLE
-  .\scripts\sync-and-build.ps1
+  .\scripts\sync-and-build.ps1 -Deploy -CreateShortcut
 
 .EXAMPLE
-  .\scripts\sync-and-build.ps1 -Deploy
-
-.EXAMPLE
-  .\scripts\sync-and-build.ps1 -Deploy -InstallDir "D:\Program Files\skills-manager"
+  .\scripts\sync-and-build.ps1 -Deploy -DeployName "skills-manager-fork.exe"
 #>
 
 [CmdletBinding()]
 param(
   [switch]$Deploy,
+  [string]$DeployName = "skills-manager-winlend.exe",
   [string]$InstallDir = "D:\Program Files\skills-manager",
+  [switch]$CreateShortcut,
   [string]$Branch = "",
   [switch]$SkipSync,
   [switch]$SkipBuild,
@@ -62,7 +63,6 @@ function Write-Step([string]$msg) {
   Write-Host ""
   Write-Host "==> $msg" -ForegroundColor Cyan
 }
-
 function Write-Ok([string]$msg) { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Warn([string]$msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 function Write-Info([string]$msg) { Write-Host "    $msg" -ForegroundColor Gray }
@@ -73,12 +73,84 @@ function Assert-Cmd([string]$name) {
   }
 }
 
-# Resolve repo root (script lives in scripts/)
+function Show-ConflictHelp {
+  param(
+    [string]$Where,
+    [string]$AbortBranch
+  )
+  Write-Host ""
+  Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+  Write-Host " MERGE CONFLICT on: $Where" -ForegroundColor Red
+  Write-Host " Script STOPPED. Nothing was built. Official .exe NOT modified." -ForegroundColor Red
+  Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" -ForegroundColor Red
+  Write-Host ""
+  Write-Host "What happened" -ForegroundColor Yellow
+  Write-Host "  Git could not auto-merge your fork changes with upstream."
+  Write-Host "  Conflicted files are left in the working tree with markers:"
+  Write-Host "    <<<<<<< HEAD"
+  Write-Host "    ======="
+  Write-Host "    >>>>>>> ..."
+  Write-Host ""
+  Write-Host "See conflicts" -ForegroundColor Yellow
+  Write-Host "  git status"
+  Write-Host "  git diff --name-only --diff-filter=U"
+  Write-Host ""
+  Write-Host "Option A — fix and continue" -ForegroundColor Yellow
+  Write-Host "  1) Edit each conflicted file; remove markers; keep the right code"
+  Write-Host "  2) git add <files>"
+  Write-Host "  3) git commit   # finishes the merge (no -m required if editor opens;"
+  Write-Host "                  # or: git commit -m `"chore: resolve merge with upstream`")"
+  Write-Host "  4) Re-run:  .\scripts\sync-and-build.ps1 -Deploy"
+  Write-Host ""
+  Write-Host "Option B — abort merge (back to pre-merge state)" -ForegroundColor Yellow
+  Write-Host "  git merge --abort"
+  if ($AbortBranch) {
+    Write-Host "  git checkout $AbortBranch   # if you were moved to another branch"
+  }
+  Write-Host ""
+  Write-Host "Tips" -ForegroundColor Yellow
+  Write-Host "  - Prefer keeping YOUR Library source_key UI in MySkills.tsx when"
+  Write-Host "    upstream only touched nearby lines; re-apply fork patches if needed."
+  Write-Host "  - docs/FORK.md and docs/plans/* are fork-only — usually keep ours."
+  Write-Host ""
+}
+
+function Invoke-GitMerge {
+  param(
+    [string]$IntoBranch,
+    [string]$FromRef,
+    [string]$Message,
+    [string]$ReturnBranch
+  )
+  git checkout $IntoBranch
+  if ($LASTEXITCODE -ne 0) { throw "git checkout $IntoBranch failed" }
+
+  git merge $FromRef -m $Message
+  if ($LASTEXITCODE -ne 0) {
+    Show-ConflictHelp -Where $IntoBranch -AbortBranch $ReturnBranch
+    # Leave repo mid-merge so user can resolve; do not auto-abort
+    throw "Merge conflict on '$IntoBranch'. Resolve or: git merge --abort"
+  }
+  Write-Ok "merged $FromRef → $IntoBranch"
+}
+
+# --- start ---
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 Write-Host "Repo: $RepoRoot" -ForegroundColor White
 
-# --- toolchain ---
+# Safety: never allow DeployName to clobber official binary name accidentally
+if ($DeployName -ieq "skills-manager.exe") {
+  throw @"
+Refusing DeployName=skills-manager.exe (would overwrite official binary).
+Use the default skills-manager-winlend.exe or another custom name, e.g.:
+  -DeployName skills-manager-fork.exe
+"@
+}
+if ($DeployName -notmatch '\.exe$') {
+  $DeployName = "$DeployName.exe"
+}
+
 Write-Step "Check toolchain"
 Assert-Cmd git
 Assert-Cmd npm
@@ -93,9 +165,8 @@ Write-Ok "git $(git --version)"
 Write-Ok "node $(node --version)"
 Write-Ok "cargo $(cargo --version)"
 
-# --- git remotes ---
 Write-Step "Check remotes"
-$remotes = git remote 2>&1
+$remotes = @(git remote)
 if ($remotes -notcontains "upstream") {
   git remote add upstream "https://github.com/xingkongliang/skills-manager.git"
   Write-Ok "added upstream → xingkongliang/skills-manager"
@@ -108,6 +179,15 @@ if ($remotes -notcontains "origin") {
   Write-Ok "origin present"
 }
 
+# Refuse if already in the middle of a merge/rebase
+if (Test-Path (Join-Path $RepoRoot ".git\MERGE_HEAD")) {
+  Show-ConflictHelp -Where "(existing unfinished merge)" -AbortBranch ""
+  throw "Unfinished merge detected. Finish (git commit) or abort (git merge --abort) first."
+}
+if (Test-Path (Join-Path $RepoRoot ".git\rebase-merge")) {
+  throw "Unfinished rebase detected. Finish or: git rebase --abort"
+}
+
 $status = git status --porcelain
 if ($status) {
   Write-Warn "Working tree is dirty:"
@@ -118,8 +198,10 @@ if ($status) {
 $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
 if (-not $Branch) { $Branch = $currentBranch }
 Write-Info "Branch: $Branch"
+Write-Info "Deploy name (side-by-side): $DeployName"
+Write-Info "Will NOT touch: skills-manager.exe (official)"
 
-# --- sync upstream ---
+# --- sync ---
 $upstreamAhead = 0
 if (-not $SkipSync) {
   Write-Step "Fetch upstream"
@@ -129,63 +211,59 @@ if (-not $SkipSync) {
     git fetch upstream --tags
   }
 
-  # Ensure local main exists
   git show-ref --verify --quiet refs/heads/main 2>$null
   if ($LASTEXITCODE -ne 0) {
-    if ($DryRun) {
-      Write-Info "[dry-run] create local main from upstream/main"
-    } else {
+    if (-not $DryRun) {
       git branch main upstream/main 2>$null
       if ($LASTEXITCODE -ne 0) {
         git checkout -B main upstream/main
         git checkout $Branch
       }
+    } else {
+      Write-Info "[dry-run] create local main from upstream/main"
     }
   }
 
   Write-Step "Compare $Branch with upstream/main"
-  # commits on upstream/main not in current branch
   $aheadList = git rev-list --count "${Branch}..upstream/main" 2>$null
   if ($LASTEXITCODE -ne 0) {
     $aheadList = git rev-list --count "HEAD..upstream/main"
   }
   $upstreamAhead = [int]$aheadList
-  $behindUs = [int](git rev-list --count "upstream/main..${Branch}" 2>$null)
+  $behindUs = 0
+  $behindRaw = git rev-list --count "upstream/main..${Branch}" 2>$null
+  if ($LASTEXITCODE -eq 0) { $behindUs = [int]$behindRaw }
 
   if ($upstreamAhead -eq 0) {
     Write-Ok "upstream/main has no new commits for this branch (already up to date)."
   } else {
-    Write-Warn "upstream/main is ahead by $upstreamAhead commit(s). Local branch is ahead of upstream by $behindUs commit(s)."
-    git log --oneline "${Branch}..upstream/main" | Select-Object -First 15 | ForEach-Object { Write-Info $_ }
+    Write-Warn "upstream/main is ahead by $upstreamAhead commit(s). Your branch is ahead of upstream by $behindUs commit(s)."
+    git log --oneline "${Branch}..upstream/main" 2>$null | Select-Object -First 15 | ForEach-Object { Write-Info $_ }
 
     if ($DryRun) {
-      Write-Info "[dry-run] would merge upstream/main into main, then into $Branch"
+      Write-Info "[dry-run] would merge upstream/main → main → $Branch"
+      Write-Info "[dry-run] on conflict: STOP + print resolve/abort help (no auto-resolve)"
     } else {
       Write-Step "Merge upstream/main → main"
-      git checkout main
-      git merge upstream/main -m "chore: merge upstream/main into main"
-      if ($LASTEXITCODE -ne 0) {
-        throw "Merge conflict on main. Resolve, commit, then re-run this script."
+      try {
+        Invoke-GitMerge -IntoBranch "main" -FromRef "upstream/main" `
+          -Message "chore: merge upstream/main into main" -ReturnBranch $Branch
+      } catch {
+        # try return to original branch if possible
+        git checkout $Branch 2>$null
+        throw
       }
-      Write-Ok "main updated"
 
       if ($Branch -ne "main") {
         Write-Step "Merge main → $Branch"
-        git checkout $Branch
-        git merge main -m "chore: merge main (upstream sync) into $Branch"
-        if ($LASTEXITCODE -ne 0) {
-          throw "Merge conflict on $Branch. Resolve, commit, then re-run."
-        }
-        Write-Ok "$Branch updated with upstream"
+        Invoke-GitMerge -IntoBranch $Branch -FromRef "main" `
+          -Message "chore: merge main (upstream sync) into $Branch" -ReturnBranch $Branch
       }
 
-      # Optional push if origin exists
-      if ((git remote) -contains "origin") {
+      if ($remotes -contains "origin") {
         Write-Step "Push to origin (best-effort)"
         git push origin main 2>&1 | Out-Host
-        if ($Branch -ne "main") {
-          git push origin $Branch 2>&1 | Out-Host
-        }
+        if ($Branch -ne "main") { git push origin $Branch 2>&1 | Out-Host }
       }
     }
   }
@@ -198,17 +276,16 @@ $builtExe = Join-Path $RepoRoot "src-tauri\target\release\skills-manager.exe"
 if (-not $SkipBuild) {
   Write-Step "Install npm deps (if needed)"
   if ($DryRun) {
-    Write-Info "[dry-run] npm ci / npm run tauri build"
+    Write-Info "[dry-run] npm ci / tauri build"
   } else {
     if (-not (Test-Path (Join-Path $RepoRoot "node_modules"))) {
       npm ci
     } else {
-      Write-Info "node_modules exists (skip npm ci). Use 'npm ci' manually if deps look stale."
+      Write-Info "node_modules exists (skip npm ci)."
     }
 
     Write-Step "Tauri build (no updater signature artifacts)"
     Write-Info "This can take several minutes on first run..."
-    # Write a tiny merge config so personal builds don't need TAURI_SIGNING_PRIVATE_KEY
     $mergeConf = Join-Path $RepoRoot "src-tauri\tauri.personal-build.conf.json"
     @'
 {
@@ -218,99 +295,116 @@ if (-not $SkipBuild) {
 }
 '@ | Set-Content -Path $mergeConf -Encoding utf8
 
-    # tauri CLI merges extra --config JSON files
     npm run tauri -- build --config "src-tauri/tauri.personal-build.conf.json"
-    $buildOk = ($LASTEXITCODE -eq 0)
-    if (-not $buildOk) {
-      Write-Warn "Build with personal config failed; retry plain tauri:build (may require signing key)"
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warn "Build with personal config failed; retry plain tauri:build"
       npm run tauri:build
       if ($LASTEXITCODE -ne 0) { throw "tauri build failed (exit $LASTEXITCODE)" }
     }
-    # keep merge conf for next runs; it only disables updater artifacts
 
     if (-not (Test-Path $builtExe)) {
       throw "Build finished but exe not found: $builtExe"
     }
     $item = Get-Item $builtExe
-    Write-Ok "Built: $($item.FullName) ($([math]::Round($item.Length/1MB,1)) MB, $($item.LastWriteTime))"
+    Write-Ok "Built: $($item.FullName) ($([math]::Round($item.Length/1MB,1)) MB)"
   }
 } else {
   Write-Warn "SkipBuild: not compiling"
 }
 
-# --- deploy ---
+# --- deploy side-by-side ---
+$targetExe = Join-Path $InstallDir $DeployName
+$cliSrc = Join-Path $RepoRoot "src-tauri\target\release\skills-manager-cli.exe"
+$cliDst = Join-Path $InstallDir "skills-manager-cli-winlend.exe"
+
 if ($Deploy) {
-  Write-Step "Deploy to install directory"
-  $targetExe = Join-Path $InstallDir "skills-manager.exe"
-  $cliSrc = Join-Path $RepoRoot "src-tauri\target\release\skills-manager-cli.exe"
-  $cliDst = Join-Path $InstallDir "skills-manager-cli.exe"
+  Write-Step "Deploy side-by-side (official exe untouched)"
+  Write-Info "Official stays: $(Join-Path $InstallDir 'skills-manager.exe')"
+  Write-Info "Fork copy to:  $targetExe"
 
   if ($DryRun) {
-    Write-Info "[dry-run] would copy $builtExe → $targetExe"
-    if (Test-Path $cliSrc) { Write-Info "[dry-run] would copy CLI → $cliDst" }
+    Write-Info "[dry-run] Copy-Item built → $targetExe"
+    if ($CreateShortcut) { Write-Info "[dry-run] create Desktop shortcut" }
   } else {
     if (-not (Test-Path $InstallDir)) {
-      throw "InstallDir not found: $InstallDir. Adjust -InstallDir."
+      throw "InstallDir not found: $InstallDir"
     }
     if (-not (Test-Path $builtExe)) {
-      throw "Built exe missing: $builtExe (run without -SkipBuild first)"
+      throw "Built exe missing: $builtExe"
     }
 
-    # Stop running app if possible
-    $procs = Get-Process -Name "skills-manager" -ErrorAction SilentlyContinue
+    # Do not kill official process unless our fork name is running
+    $forkBase = [System.IO.Path]::GetFileNameWithoutExtension($DeployName)
+    $procs = Get-Process -Name $forkBase -ErrorAction SilentlyContinue
     if ($procs) {
-      Write-Warn "Stopping running skills-manager process(es)..."
+      Write-Warn "Stopping running $forkBase process(es)..."
       $procs | Stop-Process -Force
       Start-Sleep -Seconds 1
     }
 
-    # Backup existing exe
+    # Optional backup of previous *fork* build only
     if (Test-Path $targetExe) {
       $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-      $bak = Join-Path $InstallDir "skills-manager.exe.bak-$stamp"
+      $bak = "$targetExe.bak-$stamp"
       try {
         Copy-Item -LiteralPath $targetExe -Destination $bak -Force
-        Write-Ok "Backup: $bak"
+        Write-Ok "Previous fork backup: $bak"
       } catch {
-        throw "Cannot write to $InstallDir. Re-run PowerShell as Administrator. $_"
+        throw "Cannot write to $InstallDir (need Administrator?). $_"
       }
     }
 
     try {
       Copy-Item -LiteralPath $builtExe -Destination $targetExe -Force
-      Write-Ok "Deployed: $targetExe"
+      Write-Ok "Deployed fork: $targetExe"
       if (Test-Path $cliSrc) {
         Copy-Item -LiteralPath $cliSrc -Destination $cliDst -Force
-        Write-Ok "Deployed CLI: $cliDst"
+        Write-Ok "Deployed fork CLI: $cliDst"
       }
     } catch {
-      throw "Deploy failed (permission?). Run as Administrator. $_"
+      throw "Deploy failed (permission?). Run PowerShell as Administrator. $_"
+    }
+
+    if ($CreateShortcut) {
+      $desk = [Environment]::GetFolderPath("Desktop")
+      $lnkPath = Join-Path $desk "Skills Manager (winlend).lnk"
+      $w = New-Object -ComObject WScript.Shell
+      $sc = $w.CreateShortcut($lnkPath)
+      $sc.TargetPath = $targetExe
+      $sc.WorkingDirectory = $InstallDir
+      $sc.Description = "Skills Manager — winlend fork (side-by-side)"
+      $sc.Save()
+      Write-Ok "Desktop shortcut: $lnkPath"
     }
   }
 }
 
-# --- summary ---
 Write-Step "Done"
 Write-Host @"
 
 Summary
-  Upstream new commits merged this run: $upstreamAhead (0 = none / already synced)
-  Built exe:  $builtExe
+  Upstream new commits this run: $upstreamAhead (0 = none / already synced)
+  Built:       $builtExe
   Install dir: $InstallDir
+  Fork exe:    $targetExe
+  Official:    $(Join-Path $InstallDir 'skills-manager.exe')  (never overwritten)
   Deployed:    $Deploy
 
-Personal-use notes
-  1) Close Skills Manager before -Deploy (script also tries to kill it).
-  2) Overwriting Program Files usually needs Administrator.
-  3) App data is NOT in the install dir — it stays in:
-       %LOCALAPPDATA%\com.agentskills.desktop
-     Same app id → your library/presets keep working.
-  4) In-app auto-update still points at upstream GitHub releases.
-     Prefer: Settings → disable auto-update (if available), or ignore update prompts,
-     otherwise an official update may replace your fork build.
-  5) To only check upstream without building:
-       .\scripts\sync-and-build.ps1 -SkipBuild
-  6) To rebuild without syncing:
-       .\scripts\sync-and-build.ps1 -SkipSync -Deploy
+Conflict policy
+  On merge conflict the script STOPS. No auto-resolve. No deploy.
+  Resolve: edit files → git add → git commit → re-run script
+  Abort:   git merge --abort
+
+Typical commands
+  .\scripts\sync-and-build.ps1 -Deploy -CreateShortcut
+  .\scripts\sync-and-build.ps1 -SkipBuild
+  .\scripts\sync-and-build.ps1 -SkipSync -Deploy
+
+Start your fork
+  & "$targetExe"
+  or double-click Desktop shortcut if -CreateShortcut was used
+
+Data dir (shared with official)
+  %LOCALAPPDATA%\com.agentskills.desktop
 
 "@ -ForegroundColor White
