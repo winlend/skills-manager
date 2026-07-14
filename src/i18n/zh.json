@@ -433,7 +433,39 @@
       "addButton": "添加",
       "clickToRemove": "点击标记为移除",
       "undoRemove": "点击保留此标签"
-    }
+    },
+    "sourceKeyFilter": {
+      "all": "来源：全部",
+      "placeholder": "按具体来源筛选…",
+      "search": "搜索来源…",
+      "clear": "清除来源筛选",
+      "count": "{{count}} 个 Skills",
+      "updatable": "{{count}} 个可更新"
+    },
+    "groupBySource": "按来源分组",
+    "unknownSource": "未知来源",
+    "sourceGroup": {
+      "checkUpdates": "检查更新",
+      "selectAll": "全选本组",
+      "updateAvailable": "更新本组可更新项",
+      "collapsed": "已折叠",
+      "expanded": "已展开"
+    },
+    "clearFilters": "清除筛选",
+    "clearSearch": "清除搜索",
+    "clearTags": "清除标签",
+    "clearSourceKey": "清除来源",
+    "batchAddToPreset": "加入 Preset",
+    "batchRemoveFromPreset": "从 Preset 移除",
+    "presetPickTitleAdd": "将所选 Skills 加入 Preset",
+    "presetPickTitleRemove": "从 Preset 移除所选 Skills",
+    "presetMembershipHint": "仅修改 Preset 成员关系——需在工作区「应用 Preset」后才会启用到 Agent。",
+    "batchPresetAdded": "已将 {{count}} 个 Skill 加入 Preset",
+    "batchPresetSkipped": "{{count}} 个已在 Preset 中",
+    "batchPresetRemoved": "已从 Preset 移除 {{count}} 个 Skill",
+    "batchPresetFailed": "{{count}} 个 Skill 操作失败",
+    "scopedCheckDone": "已检查 {{count}} 个 Skill 的更新",
+    "noUpdateableInScope": "当前范围内没有可更新的 Skills"
   },
   "install": {
     "title": "安装 Skills",

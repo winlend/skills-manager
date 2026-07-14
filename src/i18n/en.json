@@ -433,7 +433,39 @@
       "addButton": "Add",
       "clickToRemove": "Click to mark for removal",
       "undoRemove": "Click to keep this tag"
-    }
+    },
+    "sourceKeyFilter": {
+      "all": "Source: All",
+      "placeholder": "Filter by source…",
+      "search": "Search sources…",
+      "clear": "Clear source filter",
+      "count": "{{count}} skills",
+      "updatable": "{{count}} updatable"
+    },
+    "groupBySource": "Group by source",
+    "unknownSource": "Unknown source",
+    "sourceGroup": {
+      "checkUpdates": "Check updates",
+      "selectAll": "Select all in group",
+      "updateAvailable": "Update available in group",
+      "collapsed": "Collapsed",
+      "expanded": "Expanded"
+    },
+    "clearFilters": "Clear filters",
+    "clearSearch": "Clear search",
+    "clearTags": "Clear tags",
+    "clearSourceKey": "Clear source",
+    "batchAddToPreset": "Add to Preset",
+    "batchRemoveFromPreset": "Remove from Preset",
+    "presetPickTitleAdd": "Add selected skills to preset",
+    "presetPickTitleRemove": "Remove selected skills from preset",
+    "presetMembershipHint": "Only changes preset membership — apply the preset in a workspace to enable on agents.",
+    "batchPresetAdded": "Added {{count}} skill(s) to preset",
+    "batchPresetSkipped": "{{count}} already in preset",
+    "batchPresetRemoved": "Removed {{count}} skill(s) from preset",
+    "batchPresetFailed": "{{count}} skill(s) failed",
+    "scopedCheckDone": "Checked updates for {{count}} skill(s)",
+    "noUpdateableInScope": "No updatable skills in this selection"
   },
   "install": {
     "title": "Install Skills",

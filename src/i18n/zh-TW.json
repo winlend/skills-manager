@@ -390,7 +390,39 @@
     "batchEnable": "啟用 {{count}} 個",
     "batchDisable": "停用 {{count}} 個",
     "batchEnabled": "已啟用 {{count}} 個 Skill",
-    "batchDisabled": "已停用 {{count}} 個 Skill"
+    "batchDisabled": "已停用 {{count}} 個 Skill",
+    "sourceKeyFilter": {
+      "all": "來源：全部",
+      "placeholder": "依具體來源篩選…",
+      "search": "搜尋來源…",
+      "clear": "清除來源篩選",
+      "count": "{{count}} 個 Skills",
+      "updatable": "{{count}} 個可更新"
+    },
+    "groupBySource": "依來源分組",
+    "unknownSource": "未知來源",
+    "sourceGroup": {
+      "checkUpdates": "檢查更新",
+      "selectAll": "全選本組",
+      "updateAvailable": "更新本組可更新項",
+      "collapsed": "已摺疊",
+      "expanded": "已展開"
+    },
+    "clearFilters": "清除篩選",
+    "clearSearch": "清除搜尋",
+    "clearTags": "清除標籤",
+    "clearSourceKey": "清除來源",
+    "batchAddToPreset": "加入 Preset",
+    "batchRemoveFromPreset": "從 Preset 移除",
+    "presetPickTitleAdd": "將所選 Skills 加入 Preset",
+    "presetPickTitleRemove": "從 Preset 移除所選 Skills",
+    "presetMembershipHint": "僅修改 Preset 成員關係——需在工作區「套用 Preset」後才會啟用到 Agent。",
+    "batchPresetAdded": "已將 {{count}} 個 Skill 加入 Preset",
+    "batchPresetSkipped": "{{count}} 個已在 Preset 中",
+    "batchPresetRemoved": "已從 Preset 移除 {{count}} 個 Skill",
+    "batchPresetFailed": "{{count}} 個 Skill 操作失敗",
+    "scopedCheckDone": "已檢查 {{count}} 個 Skill 的更新",
+    "noUpdateableInScope": "目前範圍內沒有可更新的 Skills"
   },
   "install": {
     "title": "安裝 Skills",

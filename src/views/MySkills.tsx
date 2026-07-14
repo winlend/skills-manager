@@ -22,6 +22,8 @@ import {
   CircleSlash,
   Pencil,
   Trash2,
+  ChevronDown,
+  FolderTree,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { useNavigate } from "react-router-dom";
@@ -39,6 +41,11 @@ import { BatchTagDialog } from "../components/BatchTagDialog";
 import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
+import {
+  buildSourceIndex,
+  normalizeSourceKey,
+  skillMatchesSourceSearch,
+} from "../lib/skillSource";
 import type {
   ManagedSkill,
   ToolInfo,
@@ -132,6 +139,11 @@ export function MySkills() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "available">("all");
   const [sourceFilters, setSourceFilters] = useState<Set<string>>(new Set());
+  const [sourceKeyFilter, setSourceKeyFilter] = useState<string | null>(null);
+  const [groupBySource, setGroupBySource] = useState(true);
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const [sourceMenuQuery, setSourceMenuQuery] = useState("");
+  const sourceMenuRef = useRef<HTMLDivElement>(null);
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<string[]>([]);
   // Tag management from the filter bar (#233): right-click a tag pill to
@@ -202,6 +214,29 @@ export function MySkills() {
     return () => window.removeEventListener("keydown", onKey);
   }, [tagMenu]);
 
+  // Source key dropdown: Escape + click outside
+  useEffect(() => {
+    if (!sourceMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSourceMenuOpen(false);
+        setSourceMenuQuery("");
+      }
+    };
+    const onPointer = (e: MouseEvent) => {
+      if (sourceMenuRef.current && !sourceMenuRef.current.contains(e.target as Node)) {
+        setSourceMenuOpen(false);
+        setSourceMenuQuery("");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onPointer);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onPointer);
+    };
+  }, [sourceMenuOpen]);
+
   const toggleFilter = (set: Set<string>, value: string): Set<string> => {
     const next = new Set(set);
     if (next.has(value)) next.delete(value);
@@ -228,16 +263,48 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
 
+  const sourceIndex = useMemo(() => buildSourceIndex(skills), [skills]);
+
+  const filteredSourceIndex = useMemo(() => {
+    const q = sourceMenuQuery.trim().toLowerCase();
+    if (!q) return sourceIndex;
+    return sourceIndex.filter(
+      (s) =>
+        s.label.toLowerCase().includes(q) ||
+        s.key.toLowerCase().includes(q) ||
+        s.channel.toLowerCase().includes(q) ||
+        (s.url || "").toLowerCase().includes(q)
+    );
+  }, [sourceIndex, sourceMenuQuery]);
+
+  const selectedSourceEntry = useMemo(
+    () =>
+      sourceKeyFilter
+        ? sourceIndex.find((s) => s.key === sourceKeyFilter) || null
+        : null,
+    [sourceIndex, sourceKeyFilter]
+  );
+
   const filtered = useMemo(() => {
     const result = skills.filter((skill) => {
       const displayName = skillDisplayNames.get(skill.id) || skill.name;
+      const q = search.trim();
+      const qLower = q.toLowerCase();
       const matchesSearch =
-        skill.name.toLowerCase().includes(search.toLowerCase()) ||
-        displayName.toLowerCase().includes(search.toLowerCase()) ||
-        (skill.description || "").toLowerCase().includes(search.toLowerCase());
+        !q ||
+        skill.name.toLowerCase().includes(qLower) ||
+        displayName.toLowerCase().includes(qLower) ||
+        (skill.description || "").toLowerCase().includes(qLower) ||
+        skillMatchesSourceSearch(skill, q);
       if (!matchesSearch) return false;
 
+      // Channel pills (source_type) — keep existing multi-select behavior
       if (sourceFilters.size > 0 && !sourceFilters.has(skill.source_type)) return false;
+
+      // Concrete origin (source_key) — AND with other filters; not cleared by search
+      if (sourceKeyFilter) {
+        if (normalizeSourceKey(skill).key !== sourceKeyFilter) return false;
+      }
 
       if (tagFilters.size > 0) {
         const wantUntagged = tagFilters.has(UNTAGGED_FILTER);
@@ -271,7 +338,17 @@ export function MySkills() {
     }
 
     return result;
-  }, [skills, skillDisplayNames, search, sourceFilters, tagFilters, filterMode, viewedPreset, presetSkillOrder]);
+  }, [
+    skills,
+    skillDisplayNames,
+    search,
+    sourceFilters,
+    sourceKeyFilter,
+    tagFilters,
+    filterMode,
+    viewedPreset,
+    presetSkillOrder,
+  ]);
 
   const {
     isMultiSelect, setIsMultiSelect,
@@ -1070,6 +1147,147 @@ export function MySkills() {
             {t(`mySkills.sourceFilter.${src}`)}
           </button>
         ))}
+
+        <span className="mx-0.5 h-3 w-px bg-border-subtle" />
+
+        {/* Concrete source_key filter (searchable dropdown) */}
+        <div className="relative" ref={sourceMenuRef}>
+          <button
+            type="button"
+            onClick={() => {
+              setSourceMenuOpen((open) => !open);
+              if (sourceMenuOpen) setSourceMenuQuery("");
+            }}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+              sourceKeyFilter
+                ? "bg-accent text-white dark:bg-accent dark:text-white"
+                : "bg-surface-hover text-muted hover:text-secondary"
+            )}
+            title={t("mySkills.sourceKeyFilter.placeholder")}
+          >
+            {sourceKeyFilter
+              ? selectedSourceEntry?.label || t("mySkills.unknownSource")
+              : t("mySkills.sourceKeyFilter.all")}
+            {sourceKeyFilter ? (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSourceKeyFilter(null);
+                  setSourceMenuOpen(false);
+                  setSourceMenuQuery("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSourceKeyFilter(null);
+                    setSourceMenuOpen(false);
+                    setSourceMenuQuery("");
+                  }
+                }}
+                className="ml-0.5 inline-flex rounded-full p-0.5 hover:bg-white/20"
+                title={t("mySkills.sourceKeyFilter.clear")}
+                aria-label={t("mySkills.sourceKeyFilter.clear")}
+              >
+                <X className="h-3 w-3" />
+              </span>
+            ) : (
+              <ChevronDown className="h-3 w-3 opacity-70" />
+            )}
+          </button>
+
+          {sourceMenuOpen && (
+            <div className="absolute left-0 top-full z-40 mt-1 w-72 overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
+              <div className="border-b border-border-subtle p-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+                  <input
+                    type="text"
+                    value={sourceMenuQuery}
+                    onChange={(e) => setSourceMenuQuery(e.target.value)}
+                    placeholder={t("mySkills.sourceKeyFilter.search")}
+                    className="app-input w-full py-1.5 pl-8 pr-2 text-[12px]"
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                </div>
+              </div>
+              <div className="max-h-60 overflow-y-auto py-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSourceKeyFilter(null);
+                    setSourceMenuOpen(false);
+                    setSourceMenuQuery("");
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-surface-hover",
+                    !sourceKeyFilter ? "bg-accent-bg text-accent-light" : "text-secondary"
+                  )}
+                >
+                  <span className="font-medium">{t("mySkills.sourceKeyFilter.all")}</span>
+                </button>
+                {filteredSourceIndex.length === 0 ? (
+                  <div className="px-3 py-3 text-center text-[12px] text-muted">
+                    {t("mySkills.noMatch")}
+                  </div>
+                ) : (
+                  filteredSourceIndex.map((entry) => (
+                    <button
+                      key={entry.key}
+                      type="button"
+                      onClick={() => {
+                        setSourceKeyFilter(entry.key);
+                        setSourceMenuOpen(false);
+                        setSourceMenuQuery("");
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-surface-hover",
+                        sourceKeyFilter === entry.key
+                          ? "bg-accent-bg text-accent-light"
+                          : "text-secondary"
+                      )}
+                      title={entry.url || entry.key}
+                    >
+                      <span className="shrink-0 text-muted">
+                        {sourceIcon(entry.channel)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {entry.label || t("mySkills.unknownSource")}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-muted">
+                        {t("mySkills.sourceKeyFilter.count", { count: entry.count })}
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Group-by toggle (list grouping lands in Task 3; state is live now) */}
+        <button
+          type="button"
+          onClick={() => setGroupBySource((v) => !v)}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
+            groupBySource
+              ? "bg-accent text-white dark:bg-accent dark:text-white"
+              : "bg-surface-hover text-muted hover:text-secondary"
+          )}
+          title={t("mySkills.groupBySource")}
+          aria-pressed={groupBySource}
+        >
+          <FolderTree className="h-3 w-3" />
+          {t("mySkills.groupBySource")}
+        </button>
+
         {allTags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
