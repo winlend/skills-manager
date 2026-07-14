@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { Loader2, Square } from "lucide-react";
 import {
   getBatchProgressSnapshot,
+  stopBatchWork,
   subscribeBatchProgress,
 } from "../lib/batchWorkQueue";
 
@@ -29,24 +30,40 @@ export function BatchProgressBanner() {
         <span className="inline-flex min-w-0 items-center gap-1.5 truncate font-medium">
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent-light" />
           <span className="truncate">
-            {progress.mode === "check"
-              ? t("mySkills.checkProgress", {
-                  current: progress.current,
-                  total: progress.total,
-                  name: progress.name,
-                })
-              : t("mySkills.updateProgress", {
-                  current: progress.current,
-                  total: progress.total,
-                  name: progress.name,
-                })}
+            {progress.cancelling
+              ? t("mySkills.batchStopping", { name: progress.name })
+              : progress.mode === "check"
+                ? t("mySkills.checkProgress", {
+                    current: progress.current,
+                    total: progress.total,
+                    name: progress.name,
+                  })
+                : t("mySkills.updateProgress", {
+                    current: progress.current,
+                    total: progress.total,
+                    name: progress.name,
+                  })}
           </span>
         </span>
-        <span className="shrink-0 text-muted">
-          {progress.current}/{progress.total}
-          {progress.waiting > 0
-            ? ` · ${t("mySkills.queueRemaining", { n: progress.waiting })}`
-            : ""}
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="text-muted">
+            {progress.current}/{progress.total}
+            {progress.waiting > 0
+              ? ` · ${t("mySkills.queueRemaining", { n: progress.waiting })}`
+              : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => stopBatchWork()}
+            disabled={progress.cancelling}
+            title={t("mySkills.batchStop")}
+            className="inline-flex items-center gap-1 rounded-md border border-border-subtle bg-surface px-2 py-0.5 text-[11px] font-medium text-secondary transition-colors hover:bg-surface-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Square className="h-3 w-3 fill-current" />
+            {progress.cancelling
+              ? t("mySkills.batchStoppingShort")
+              : t("mySkills.batchStop")}
+          </button>
         </span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
@@ -72,7 +89,9 @@ export function BatchProgressBanner() {
         </div>
       )}
       <p className="mt-1 text-[10px] text-muted">
-        {t("mySkills.batchBackgroundHint")}
+        {progress.cancelling
+          ? t("mySkills.batchStopHint")
+          : t("mySkills.batchBackgroundHint")}
       </p>
     </div>
   );

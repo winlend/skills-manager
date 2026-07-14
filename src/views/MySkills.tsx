@@ -735,6 +735,15 @@ export function MySkills() {
     });
     setBatchWorkNotify({
       onDone: (r) => {
+        if (r.cancelled) {
+          toast.info(
+            t("mySkills.batchStopped", {
+              processed: r.processed,
+              dropped: r.dropped,
+            })
+          );
+          return;
+        }
         if (r.mode === "check") {
           toast.success(
             t("mySkills.checkProgressDone", {

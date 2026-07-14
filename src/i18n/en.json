@@ -479,7 +479,12 @@
     "downloadSpeed": "{{speed}}/s",
     "downloadDetail": "{{detail}}",
     "batchBackgroundHint": "Queue keeps running after you change filters. Current item may be outside the filtered list.",
-    "batchRunningOutsideFilter": "Updating in background (not in current filter): {{name}}"
+    "batchRunningOutsideFilter": "Updating in background (not in current filter): {{name}}",
+    "batchStop": "Stop",
+    "batchStoppingShort": "Stopping…",
+    "batchStopping": "Stopping after {{name}}…",
+    "batchStopHint": "Waiting for the current skill to finish, then the rest of the queue is cancelled.",
+    "batchStopped": "Stopped after {{processed}} skill(s); skipped {{dropped}} waiting"
   },
   "install": {
     "title": "Install Skills",

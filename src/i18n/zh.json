@@ -479,7 +479,12 @@
     "downloadSpeed": "{{speed}}/s",
     "downloadDetail": "{{detail}}",
     "batchBackgroundHint": "切换标签/筛选不会中断队列；当前项可能不在筛选结果里。",
-    "batchRunningOutsideFilter": "后台更新中（不在当前筛选）：{{name}}"
+    "batchRunningOutsideFilter": "后台更新中（不在当前筛选）：{{name}}",
+    "batchStop": "停止",
+    "batchStoppingShort": "正在停止…",
+    "batchStopping": "完成「{{name}}」后停止…",
+    "batchStopHint": "等待当前 Skill 结束后，其余排队任务将取消。",
+    "batchStopped": "已停止：完成 {{processed}} 个，取消排队 {{dropped}} 个"
   },
   "install": {
     "title": "安装 Skills",

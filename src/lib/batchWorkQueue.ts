@@ -13,6 +13,8 @@ export type BatchProgressSnapshot = {
   waiting: number;
   skillId: string | null;
   running: boolean;
+  /** True after stopBatchWork() until the in-flight job finishes. */
+  cancelling: boolean;
   downloadDetail: string | null;
   downloadSpeedLabel: string | null;
 };
@@ -45,6 +47,8 @@ type Listener = () => void;
 const queue: Job[] = [];
 const pending = new Set<string>();
 let running = false;
+/** Drop remaining queue jobs after the current one finishes. */
+let cancelRequested = false;
 let stats = { ok: 0, unchanged: 0, failed: 0, processed: 0 };
 let snapshot: BatchProgressSnapshot = emptySnapshot();
 const listeners = new Set<Listener>();
@@ -60,6 +64,7 @@ function emptySnapshot(): BatchProgressSnapshot {
     waiting: 0,
     skillId: null,
     running: false,
+    cancelling: false,
     downloadDetail: null,
     downloadSpeedLabel: null,
   };
@@ -125,18 +130,47 @@ type DrainResult = {
   unchanged: number;
   failed: number;
   processed: number;
+  cancelled: boolean;
+  /** Jobs dropped from the queue when stop was requested. */
+  dropped: number;
 };
+
+function dropQueuedJobs(): number {
+  const dropped = queue.length;
+  while (queue.length > 0) {
+    const job = queue.shift()!;
+    pending.delete(workKey(job.mode, job.id));
+  }
+  return dropped;
+}
 
 async function drain(): Promise<DrainResult> {
   if (running) {
-    return { mode: null, ok: 0, unchanged: 0, failed: 0, processed: 0 };
+    return {
+      mode: null,
+      ok: 0,
+      unchanged: 0,
+      failed: 0,
+      processed: 0,
+      cancelled: false,
+      dropped: 0,
+    };
   }
   if (!runners) {
     console.error("batchWorkQueue: runners not configured");
-    return { mode: null, ok: 0, unchanged: 0, failed: 0, processed: 0 };
+    return {
+      mode: null,
+      ok: 0,
+      unchanged: 0,
+      failed: 0,
+      processed: 0,
+      cancelled: false,
+      dropped: 0,
+    };
   }
 
   running = true;
+  cancelRequested = false;
   stats = { ok: 0, unchanged: 0, failed: 0, processed: 0 };
   setSnapshot({
     ...emptySnapshot(),
@@ -145,15 +179,27 @@ async function drain(): Promise<DrainResult> {
   downloadMeter = null;
 
   let lastMode: WorkMode | null = null;
+  let dropped = 0;
+  let cancelled = false;
   const r = runners;
 
   try {
     while (queue.length > 0) {
+      if (cancelRequested) {
+        dropped += dropQueuedJobs();
+        cancelled = true;
+        break;
+      }
+
       const job = queue.shift()!;
       lastMode = job.mode;
       const name = r.displayName(job.id, job.name);
       publishProgress(job.mode, name, job.id);
-      setSnapshot({ downloadDetail: null, downloadSpeedLabel: null });
+      setSnapshot({
+        downloadDetail: null,
+        downloadSpeedLabel: null,
+        cancelling: cancelRequested,
+      });
       downloadMeter = null;
 
       try {
@@ -174,18 +220,28 @@ async function drain(): Promise<DrainResult> {
         pending.delete(workKey(job.mode, job.id));
         stats.processed += 1;
       }
+
+      // Drop remaining work after the in-flight job finishes.
+      if (cancelRequested) {
+        dropped += dropQueuedJobs();
+        cancelled = true;
+        break;
+      }
     }
   } finally {
     running = false;
+    cancelRequested = false;
     const result: DrainResult = {
       mode: lastMode,
       ok: stats.ok,
       unchanged: stats.unchanged,
       failed: stats.failed,
       processed: stats.processed,
+      cancelled,
+      dropped,
     };
     setSnapshot(emptySnapshot());
-    if (queue.length > 0) {
+    if (queue.length > 0 && !cancelled) {
       void drainAndNotify();
       return result;
     }
@@ -201,6 +257,8 @@ async function drain(): Promise<DrainResult> {
 export type EnqueueResult = { added: number; skipped: number };
 
 export function enqueueUpdates(skills: WorkSkill[]): EnqueueResult {
+  // New enqueue after a stop clears the cancel flag so work runs again.
+  cancelRequested = false;
   const candidates = skills.filter(canRefreshSkill);
   let added = 0;
   let skipped = 0;
@@ -225,6 +283,7 @@ export function enqueueUpdates(skills: WorkSkill[]): EnqueueResult {
 }
 
 export function enqueueChecks(skills: WorkSkill[]): EnqueueResult {
+  cancelRequested = false;
   const candidates = skills.filter(canRefreshSkill);
   let added = 0;
   let skipped = 0;
@@ -246,6 +305,26 @@ export function enqueueChecks(skills: WorkSkill[]): EnqueueResult {
   }
   if (added > 0) void drainAndNotify();
   return { added, skipped };
+}
+
+/**
+ * Stop batch work: clear queued jobs immediately; the job currently running
+ * finishes, then drain exits (Tauri ops are not hard-aborted).
+ */
+export function stopBatchWork(): { dropped: number; wasRunning: boolean } {
+  const wasRunning = running || queue.length > 0;
+  const dropped = dropQueuedJobs();
+  if (running) {
+    cancelRequested = true;
+    setSnapshot({
+      cancelling: true,
+      waiting: 0,
+    });
+  } else {
+    cancelRequested = false;
+    setSnapshot(emptySnapshot());
+  }
+  return { dropped, wasRunning };
 }
 
 type NotifyFns = {
@@ -317,4 +396,8 @@ export function formatByteRate(bps: number): string {
 
 export function isBatchWorkRunning(): boolean {
   return running || queue.length > 0;
+}
+
+export function isBatchWorkCancelling(): boolean {
+  return cancelRequested && running;
 }
