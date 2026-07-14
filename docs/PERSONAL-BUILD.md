@@ -16,18 +16,23 @@
 
 ## 一键用法
 
+**默认会部署**（复制为旁路 `skills-manager-winlend.exe`）。不需要再写 `-Deploy`。
+
 ```powershell
 cd "F:\AI Works\Projects\skills-manager"
 
-# 同步（若有）+ 打包 + 部署为新文件名 + 桌面快捷方式
-.\scripts\sync-and-build.ps1 -Deploy -CreateShortcut
+# 同步（若有）+ 打包 + 部署 + 桌面快捷方式
+.\scripts\sync-and-build.ps1 -CreateShortcut
 
 # 自定义文件名
-.\scripts\sync-and-build.ps1 -Deploy -DeployName "skills-manager-fork.exe"
+.\scripts\sync-and-build.ps1 -DeployName "skills-manager-fork.exe"
 
-# 只同步 / 只打包
+# 只同步 / 只打包不部署
 .\scripts\sync-and-build.ps1 -SkipBuild
-.\scripts\sync-and-build.ps1 -SkipSync -Deploy
+.\scripts\sync-and-build.ps1 -SkipSync -NoDeploy
+
+# 同步 + 打包，但不复制到 InstallDir
+.\scripts\sync-and-build.ps1 -NoDeploy
 ```
 
 **拒绝**把 `-DeployName` 设为 `skills-manager.exe`，防止误覆盖官方。
@@ -63,7 +68,7 @@ git diff --name-only --diff-filter=U
 #    编辑冲突文件，去掉 <<<<<<< ======= >>>>>>>
 git add <文件>
 git commit -m "chore: resolve merge with upstream"
-.\scripts\sync-and-build.ps1 -Deploy
+.\scripts\sync-and-build.ps1
 
 # B) 放弃这次合并
 git merge --abort
@@ -83,9 +88,9 @@ git merge --abort
 
 1. `tauri build`（`createUpdaterArtifacts: false`，个人用一般无需签名密钥）  
 2. 产物：`src-tauri\target\release\skills-manager.exe`  
-3. `-Deploy`：复制为  
+3. **默认部署**：复制为  
    `D:\Program Files\skills-manager\skills-manager-winlend.exe`  
-   （仅备份同名 **fork** 旧文件，不动官方 exe）  
+   （仅备份同名 **fork** 旧文件，不动官方 exe；`-NoDeploy` 可跳过）  
 4. `-CreateShortcut`：桌面「Skills Manager (winlend)」  
 
 启动 fork：
@@ -100,7 +105,7 @@ git merge --abort
 
 ## 自动更新提醒
 
-应用内更新仍可能指向官方 Release。个人用建议忽略更新提示，避免官方安装器覆盖目录；你的 `*-winlend.exe` 只要不被安装器删除即可（多数安装器只替换主 exe，但全量重装仍可能清目录——重装后重新跑一次 `-Deploy`）。
+应用内更新仍可能指向官方 Release。个人用建议忽略更新提示，避免官方安装器覆盖目录；你的 `*-winlend.exe` 只要不被安装器删除即可（多数安装器只替换主 exe，但全量重装仍可能清目录——重装后重新跑一次脚本即可）。
 
 ---
 
@@ -109,6 +114,6 @@ git merge --abort
 | 问题 | 处理 |
 |------|------|
 | 冲突后工作区乱七八糟 | `git merge --abort` 回到合并前 |
-| Access denied 写 Program Files | 管理员运行；或 `-InstallDir` 改到你有权限的目录（如 `%LOCALAPPDATA%\skills-manager-winlend`） |
+| Access denied 写 Program Files | 管理员运行；或 `-InstallDir` 改到你有权限的目录；或 `-NoDeploy` 只打包 |
 | 脏工作区拒绝运行 | commit / stash 后再跑 |
 | 想回官方 | 直接运行官方 `skills-manager.exe`，不必删 fork 副本 |

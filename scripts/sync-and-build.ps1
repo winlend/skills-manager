@@ -10,16 +10,17 @@
        On CONFLICT: script STOPS immediately. Official skills-manager.exe is never
        touched. You resolve git conflicts manually, then re-run.
     3) tauri build (without updater signature artifacts)
-    4) optional: copy as a NEW filename beside the official install (default:
-       skills-manager-winlend.exe — does NOT overwrite skills-manager.exe)
+    4) copy as a NEW filename beside the official install (default ON;
+       skills-manager-winlend.exe — does NOT overwrite skills-manager.exe;
+       pass -NoDeploy to skip copy)
 
   Official install (this machine):
     D:\Program Files\skills-manager\skills-manager.exe
 
   App data: %LOCALAPPDATA%\com.agentskills.desktop (shared with official)
 
-.PARAMETER Deploy
-  Copy built exe into InstallDir under DeployName (side-by-side, not replace).
+.PARAMETER NoDeploy
+  Skip copying the built exe (deploy is ON by default).
 
 .PARAMETER DeployName
   Filename for your fork build. Default: skills-manager-winlend.exe
@@ -38,15 +39,19 @@
   See examples.
 
 .EXAMPLE
-  .\scripts\sync-and-build.ps1 -Deploy -CreateShortcut
+  .\scripts\sync-and-build.ps1 -CreateShortcut
 
 .EXAMPLE
-  .\scripts\sync-and-build.ps1 -Deploy -DeployName "skills-manager-fork.exe"
+  .\scripts\sync-and-build.ps1 -DeployName "skills-manager-fork.exe"
+
+.EXAMPLE
+  .\scripts\sync-and-build.ps1 -NoDeploy
 #>
 
 [CmdletBinding()]
 param(
-  [switch]$Deploy,
+  # Deploy is default ON; pass -NoDeploy to only build/sync without copy.
+  [switch]$NoDeploy,
   [string]$DeployName = "skills-manager-winlend.exe",
   [string]$InstallDir = "D:\Program Files\skills-manager",
   [switch]$CreateShortcut,
@@ -55,6 +60,9 @@ param(
   [switch]$SkipBuild,
   [switch]$DryRun
 )
+
+# Keep $Deploy for logs / summary (true unless -NoDeploy).
+$Deploy = -not $NoDeploy
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -100,7 +108,7 @@ function Show-ConflictHelp {
   Write-Host "  2) git add <files>"
   Write-Host "  3) git commit   # finishes the merge (no -m required if editor opens;"
   Write-Host "                  # or: git commit -m `"chore: resolve merge with upstream`")"
-  Write-Host "  4) Re-run:  .\scripts\sync-and-build.ps1 -Deploy"
+  Write-Host "  4) Re-run:  .\scripts\sync-and-build.ps1"
   Write-Host ""
   Write-Host "Option B — abort merge (back to pre-merge state)" -ForegroundColor Yellow
   Write-Host "  git merge --abort"
@@ -396,9 +404,10 @@ Conflict policy
   Abort:   git merge --abort
 
 Typical commands
-  .\scripts\sync-and-build.ps1 -Deploy -CreateShortcut
+  .\scripts\sync-and-build.ps1 -CreateShortcut
   .\scripts\sync-and-build.ps1 -SkipBuild
-  .\scripts\sync-and-build.ps1 -SkipSync -Deploy
+  .\scripts\sync-and-build.ps1 -SkipSync
+  .\scripts\sync-and-build.ps1 -NoDeploy
 
 Start your fork
   & "$targetExe"

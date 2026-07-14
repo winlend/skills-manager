@@ -5,7 +5,7 @@ echo.
 echo Skills Manager — sync upstream (if needed) + build personal exe
 echo.
 
-REM Prefer elevating only when -Deploy is passed among args
+REM Deploy is ON by default in the .ps1; pass -NoDeploy to skip copy
 echo Args: %*
 echo.
 
