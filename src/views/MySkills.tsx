@@ -23,6 +23,7 @@ import {
   Pencil,
   Trash2,
   ChevronDown,
+  ChevronRight,
   FolderTree,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
@@ -38,6 +39,7 @@ import { DeleteSkillButton } from "../components/DeleteSkillButton";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
+import { PresetPickDialog } from "../components/PresetPickDialog";
 import { SyncDots } from "../components/SyncDots";
 import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, UNTAGGED_FILTER } from "../lib/skillTags";
@@ -45,6 +47,7 @@ import {
   buildSourceIndex,
   normalizeSourceKey,
   skillMatchesSourceSearch,
+  type NormalizedSource,
 } from "../lib/skillSource";
 import type {
   ManagedSkill,
@@ -126,6 +129,7 @@ export function MySkills() {
   const navigate = useNavigate();
   const {
     viewedPreset,
+    presets,
     tools,
     managedSkills: skills,
     refreshPresets,
@@ -144,6 +148,11 @@ export function MySkills() {
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const [sourceMenuQuery, setSourceMenuQuery] = useState("");
   const sourceMenuRef = useRef<HTMLDivElement>(null);
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
+  const [groupCheckingKey, setGroupCheckingKey] = useState<string | null>(null);
+  const [scopedChecking, setScopedChecking] = useState(false);
+  const [presetPickMode, setPresetPickMode] = useState<"add" | "remove" | null>(null);
+  const [presetPickBusy, setPresetPickBusy] = useState(false);
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
   const [allTags, setAllTags] = useState<string[]>([]);
   // Tag management from the filter bar (#233): right-click a tag pill to
@@ -350,6 +359,26 @@ export function MySkills() {
     presetSkillOrder,
   ]);
 
+  const grouped = useMemo(() => {
+    if (!groupBySource) return null;
+    const map = new Map<string, { meta: NormalizedSource; skills: ManagedSkill[] }>();
+    for (const skill of filtered) {
+      const meta = normalizeSourceKey(skill);
+      const g = map.get(meta.key) || { meta, skills: [] as ManagedSkill[] };
+      g.skills.push(skill);
+      map.set(meta.key, g);
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.meta.label.localeCompare(b.meta.label)
+    );
+  }, [filtered, groupBySource]);
+
+  const hasActiveFilters =
+    !!search.trim() ||
+    sourceFilters.size > 0 ||
+    !!sourceKeyFilter ||
+    tagFilters.size > 0;
+
   const {
     isMultiSelect, setIsMultiSelect,
     selectedIds,
@@ -357,6 +386,7 @@ export function MySkills() {
     isAllSelected,
     anyDisabled,
     handleSelectAll,
+    selectKeys,
     exitMultiSelect,
   } = useMultiSelect({
     items: skills,
@@ -755,6 +785,134 @@ export function MySkills() {
     } finally {
       setCheckingSkillId(null);
     }
+  };
+
+  const handleScopedCheckUpdates = async (targetSkills: ManagedSkill[]) => {
+    const refreshable = targetSkills.filter((skill) => canRefresh(skill));
+    if (refreshable.length === 0) {
+      toast.info(t("mySkills.noUpdateableInScope"));
+      return;
+    }
+    setScopedChecking(true);
+    let failed = 0;
+    try {
+      for (const skill of refreshable) {
+        try {
+          await api.checkSkillUpdate(skill.id, true);
+        } catch {
+          failed += 1;
+        }
+      }
+      toast.success(t("mySkills.scopedCheckDone", { count: refreshable.length - failed }));
+      if (failed > 0) {
+        toast.error(t("mySkills.batchUpdateFailed", { count: failed }));
+      }
+    } finally {
+      await refreshManagedSkills();
+      setScopedChecking(false);
+    }
+  };
+
+  const handleGroupCheckUpdates = async (groupSkills: ManagedSkill[], key: string) => {
+    setGroupCheckingKey(key);
+    try {
+      await handleScopedCheckUpdates(groupSkills);
+    } finally {
+      setGroupCheckingKey(null);
+    }
+  };
+
+  const handleGroupUpdateAvailable = async (groupSkills: ManagedSkill[]) => {
+    const updatable = groupSkills.filter(
+      (skill) => skill.update_status === "update_available" && canRefresh(skill)
+    );
+    if (updatable.length === 0) {
+      toast.info(t("mySkills.noUpdateableInScope"));
+      return;
+    }
+    setBatchUpdating(true);
+    try {
+      const result = await api.batchUpdateSkills(updatable.map((s) => s.id));
+      if (result.refreshed > 0) {
+        toast.success(t("mySkills.batchUpdated", { count: result.refreshed }));
+      }
+      if (result.unchanged > 0) {
+        toast.info(t("mySkills.batchAlreadyUpToDate", { count: result.unchanged }));
+      }
+      if (result.failed.length > 0) {
+        toast.error(t("mySkills.batchUpdateFailed", { count: result.failed.length }));
+      }
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, t("common.error")));
+    } finally {
+      await refreshManagedSkills();
+      setBatchUpdating(false);
+    }
+  };
+
+  const handleBatchAddToPreset = async (presetId: string) => {
+    const ids = [...selectedIds];
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+    setPresetPickBusy(true);
+    try {
+      for (const id of ids) {
+        const skill = skills.find((s) => s.id === id);
+        if (!skill) continue;
+        if (skill.preset_ids.includes(presetId)) {
+          skipped += 1;
+          continue;
+        }
+        try {
+          await api.addSkillToPreset(id, presetId);
+          added += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (added > 0) toast.success(t("mySkills.batchPresetAdded", { count: added }));
+      if (skipped > 0) toast.info(t("mySkills.batchPresetSkipped", { count: skipped }));
+      if (failed > 0) toast.error(t("mySkills.batchPresetFailed", { count: failed }));
+      await Promise.all([refreshManagedSkills(), refreshPresets()]);
+      setPresetPickMode(null);
+    } finally {
+      setPresetPickBusy(false);
+    }
+  };
+
+  const handleBatchRemoveFromPreset = async (presetId: string) => {
+    const ids = [...selectedIds];
+    let removed = 0;
+    let failed = 0;
+    setPresetPickBusy(true);
+    try {
+      for (const id of ids) {
+        const skill = skills.find((s) => s.id === id);
+        if (!skill || !skill.preset_ids.includes(presetId)) continue;
+        try {
+          await api.removeSkillFromPreset(id, presetId);
+          removed += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      if (removed > 0) toast.success(t("mySkills.batchPresetRemoved", { count: removed }));
+      if (failed > 0) toast.error(t("mySkills.batchPresetFailed", { count: failed }));
+      await Promise.all([refreshManagedSkills(), refreshPresets()]);
+      setPresetPickMode(null);
+    } finally {
+      setPresetPickBusy(false);
+    }
+  };
+
+  const toggleGroupCollapsed = (key: string) => {
+    setCollapsedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
   const handleRefreshSkill = async (skill: ManagedSkill) => {
@@ -1345,6 +1503,7 @@ export function MySkills() {
           anyUpdatable={anyRefreshableSelected}
           showToggle={!!viewedPreset}
           updating={batchUpdating}
+          checking={scopedChecking}
           labels={{
             hint: t("mySkills.selectHint"),
             selected: t("mySkills.selectedCount", { count: selectedIds.size }),
@@ -1356,6 +1515,9 @@ export function MySkills() {
             deselectAll: t("mySkills.deselectAll"),
             cancel: t("common.cancel"),
             editTags: t("mySkills.batchEditTags", { count: selectedIds.size }),
+            addToPreset: t("mySkills.batchAddToPreset"),
+            removeFromPreset: t("mySkills.batchRemoveFromPreset"),
+            checkUpdates: t("mySkills.sourceGroup.checkUpdates"),
           }}
           onUpdate={handleBatchRefresh}
           onDelete={() => setBatchDeleteConfirm(true)}
@@ -1363,6 +1525,11 @@ export function MySkills() {
           onSelectAll={handleSelectAll}
           onCancel={exitMultiSelect}
           onEditTags={() => setBatchTagDialogOpen(true)}
+          onAddToPreset={() => setPresetPickMode("add")}
+          onRemoveFromPreset={() => setPresetPickMode("remove")}
+          onCheckUpdates={() =>
+            handleScopedCheckUpdates(skills.filter((s) => selectedIds.has(s.id)))
+          }
         />
       )}
 
@@ -1373,6 +1540,46 @@ export function MySkills() {
           <p className="text-[13px] text-muted">
             {skills.length === 0 ? t("mySkills.addFirst") : t("mySkills.noMatch")}
           </p>
+          {skills.length > 0 && hasActiveFilters && (
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {!!search.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="rounded-md border border-border-subtle px-2.5 py-1 text-[12px] text-secondary hover:bg-surface-hover"
+                >
+                  {t("mySkills.clearSearch")}
+                </button>
+              )}
+              {tagFilters.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setTagFilters(new Set())}
+                  className="rounded-md border border-border-subtle px-2.5 py-1 text-[12px] text-secondary hover:bg-surface-hover"
+                >
+                  {t("mySkills.clearTags")}
+                </button>
+              )}
+              {sourceKeyFilter && (
+                <button
+                  type="button"
+                  onClick={() => setSourceKeyFilter(null)}
+                  className="rounded-md border border-border-subtle px-2.5 py-1 text-[12px] text-secondary hover:bg-surface-hover"
+                >
+                  {t("mySkills.clearSourceKey")}
+                </button>
+              )}
+              {sourceFilters.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSourceFilters(new Set())}
+                  className="rounded-md border border-border-subtle px-2.5 py-1 text-[12px] text-secondary hover:bg-surface-hover"
+                >
+                  {t("mySkills.clearFilters")}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -1380,15 +1587,85 @@ export function MySkills() {
             items={filtered.map((s) => s.id)}
             strategy={viewMode === "grid" ? rectSortingStrategy : verticalListSortingStrategy}
           >
+          <div className="flex flex-col gap-3 pb-8">
+          {(grouped ?? [{ meta: null as NormalizedSource | null, skills: filtered }]).map((group) => {
+            const groupKey = group.meta?.key ?? "__flat__";
+            const collapsed = group.meta ? collapsedKeys.has(group.meta.key) : false;
+            const updatableInGroup = group.skills.filter(
+              (s) => s.update_status === "update_available" && canRefresh(s)
+            ).length;
+            const refreshableInGroup = group.skills.filter((s) => canRefresh(s)).length;
+            return (
+              <div key={groupKey} className="flex flex-col gap-2">
+                {group.meta && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-surface-hover/40 px-2.5 py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroupCollapsed(group.meta!.key)}
+                      className="inline-flex items-center gap-1 text-[13px] font-semibold text-secondary hover:text-primary"
+                    >
+                      {collapsed ? (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      )}
+                      <span className="text-muted">{sourceIcon(group.meta.channel)}</span>
+                      <span>{group.meta.label || t("mySkills.unknownSource")}</span>
+                    </button>
+                    <span className="text-[12px] text-muted">
+                      {t("mySkills.sourceKeyFilter.count", { count: group.skills.length })}
+                      {updatableInGroup > 0
+                        ? ` · ${t("mySkills.sourceKeyFilter.updatable", { count: updatableInGroup })}`
+                        : ""}
+                    </span>
+                    <div className="ml-auto flex flex-wrap items-center gap-1">
+                      {refreshableInGroup > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleGroupCheckUpdates(group.skills, group.meta!.key)}
+                          disabled={groupCheckingKey === group.meta.key || scopedChecking}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+                        >
+                          <RefreshCw
+                            className={cn(
+                              "h-3 w-3",
+                              groupCheckingKey === group.meta.key && "animate-spin"
+                            )}
+                          />
+                          {t("mySkills.sourceGroup.checkUpdates")}
+                        </button>
+                      )}
+                      {updatableInGroup > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleGroupUpdateAvailable(group.skills)}
+                          disabled={batchUpdating}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-light hover:bg-accent-bg disabled:opacity-50"
+                        >
+                          <RotateCcw className={cn("h-3 w-3", batchUpdating && "animate-spin")} />
+                          {t("mySkills.sourceGroup.updateAvailable")}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => selectKeys(group.skills.map((s) => s.id))}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-surface-hover hover:text-secondary"
+                      >
+                        <SquareCheck className="h-3 w-3" />
+                        {t("mySkills.sourceGroup.selectAll")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {!collapsed && (
           <div
             className={cn(
-              "pb-8",
               viewMode === "grid"
                 ? "grid grid-cols-2 gap-3 lg:grid-cols-3"
                 : "flex flex-col gap-0.5"
             )}
           >
-          {filtered.map((skill) => {
+          {group.skills.map((skill) => {
             const enabledInPreset = viewedPreset
               ? skill.preset_ids.includes(viewedPreset.id)
               : false;
@@ -1779,6 +2056,11 @@ export function MySkills() {
             );
           })}
         </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
           </SortableContext>
         </DndContext>
       )}
@@ -1859,6 +2141,22 @@ export function MySkills() {
         allTags={allTags}
         onClose={() => setBatchTagDialogOpen(false)}
         onApply={handleBatchEditTags}
+      />
+      <PresetPickDialog
+        open={presetPickMode !== null}
+        mode={presetPickMode ?? "add"}
+        presets={presets}
+        busy={presetPickBusy}
+        onClose={() => {
+          if (!presetPickBusy) setPresetPickMode(null);
+        }}
+        onConfirm={(presetId) => {
+          if (presetPickMode === "remove") {
+            void handleBatchRemoveFromPreset(presetId);
+          } else {
+            void handleBatchAddToPreset(presetId);
+          }
+        }}
       />
     </div>
   );

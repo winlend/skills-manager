@@ -43,14 +43,22 @@ export function useMultiSelect<T>({
     setSelectedIds(new Set<string>());
   };
 
+  /** Replace selection with the given keys (e.g. select all in a source group). */
+  const selectKeys = (keys: string[]) => {
+    setIsMultiSelect(true);
+    setSelectedIds(new Set(keys));
+  };
+
   return {
     isMultiSelect,
     setIsMultiSelect,
     selectedIds,
+    setSelectedIds,
     toggleSelect,
     isAllSelected,
     anyDisabled,
     handleSelectAll,
+    selectKeys,
     exitMultiSelect,
   };
 }
