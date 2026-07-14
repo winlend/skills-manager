@@ -80,8 +80,8 @@ export function MultiSelectToolbar({
           {onCheckUpdates && labels.checkUpdates && (
             <button
               onClick={onCheckUpdates}
-              disabled={checking}
-              className="inline-flex items-center gap-1.5 rounded-md bg-surface-active px-2.5 py-1 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md bg-surface-active px-2.5 py-1 text-[13px] font-medium text-secondary transition-colors hover:bg-surface-hover"
+              title={checking ? "Queue more if not already pending" : undefined}
             >
               <RotateCcw className={cn("h-3.5 w-3.5", checking && "animate-spin")} />
               {labels.checkUpdates}
@@ -90,8 +90,8 @@ export function MultiSelectToolbar({
           {anyUpdatable && labels.update && onUpdate && (
             <button
               onClick={onUpdate}
-              disabled={updating}
-              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-[13px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-[13px] font-medium text-white transition-colors hover:opacity-90"
+              title={updating ? "Queue more if not already pending" : undefined}
             >
               <RotateCcw className={cn("h-3.5 w-3.5", updating && "animate-spin")} />
               {labels.update}

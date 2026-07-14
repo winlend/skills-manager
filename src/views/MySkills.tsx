@@ -1400,7 +1400,7 @@ export function MySkills() {
           </button>
           <button
             onClick={handleUpdateAvailableSkills}
-            disabled={batchUpdating || availableUpdateCount === 0}
+            disabled={availableUpdateCount === 0}
             title={
               hasActiveFilters
                 ? t("mySkills.updateFiltered", { count: availableUpdateCount }) +
@@ -1839,8 +1839,7 @@ export function MySkills() {
                         <button
                           type="button"
                           onClick={() => handleGroupCheckUpdates(group.skills, group.meta!.key)}
-                          disabled={groupCheckingKey === group.meta.key || scopedChecking}
-                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-surface-hover hover:text-secondary disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-surface-hover hover:text-secondary"
                         >
                           <RefreshCw
                             className={cn(
@@ -1855,8 +1854,7 @@ export function MySkills() {
                         <button
                           type="button"
                           onClick={() => handleGroupUpdateAvailable(group.skills)}
-                          disabled={batchUpdating}
-                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-light hover:bg-accent-bg disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-accent-light hover:bg-accent-bg"
                         >
                           <RotateCcw className={cn("h-3 w-3", batchUpdating && "animate-spin")} />
                           {t("mySkills.sourceGroup.updateAvailable", {
