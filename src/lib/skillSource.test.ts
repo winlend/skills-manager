@@ -5,6 +5,7 @@ import {
   channelFromSourceType,
   skillMatchesSourceSearch,
   buildSourceIndex,
+  shortSourceLabel,
 } from "./skillSource";
 
 describe("channelFromSourceType", () => {
@@ -75,6 +76,37 @@ describe("normalizeSourceKey", () => {
     expect(r.key).toBe("skillssh:vercel-labs/agent-skills");
     expect(r.channel).toBe("skillssh");
     expect(r.label).toBe("vercel-labs/agent-skills");
+  });
+
+  it("skillssh full github url becomes short owner/repo label", () => {
+    const r = normalizeSourceKey({
+      source_type: "skillssh",
+      source_ref: "https://github.com/obra/superpowers",
+      source_ref_resolved: null,
+      source_subpath: null,
+    });
+    expect(r.label).toBe("obra/superpowers");
+    expect(r.label.startsWith("http")).toBe(false);
+    expect(r.key).toBe("skillssh:obra/superpowers");
+  });
+
+  it("never uses full https url as primary label for git", () => {
+    const r = normalizeSourceKey({
+      source_type: "git",
+      source_ref: "https://github.com/conardli/some-long-repo-name.git",
+      source_ref_resolved: null,
+      source_subpath: null,
+    });
+    expect(r.label).toBe("conardli/some-long-repo-name");
+    expect(r.label.includes("https://")).toBe(false);
+  });
+
+  it("shortSourceLabel shortens bare github.com paths", () => {
+    expect(shortSourceLabel("https://github.com/obra/superpowers")).toBe(
+      "obra/superpowers"
+    );
+    expect(shortSourceLabel("git@github.com:foo/bar.git")).toBe("foo/bar");
+    expect(shortSourceLabel("mindfold-ai/trellis")).toBe("mindfold-ai/trellis");
   });
 
   it("local uses path", () => {

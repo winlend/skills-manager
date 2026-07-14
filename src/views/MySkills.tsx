@@ -1358,7 +1358,7 @@ export function MySkills() {
           </button>
 
           {sourceMenuOpen && (
-            <div className="absolute left-0 top-full z-40 mt-1 w-72 overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
+            <div className="absolute left-0 top-full z-40 mt-1 w-80 max-w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-surface shadow-lg">
               <div className="border-b border-border-subtle p-2">
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
@@ -1395,7 +1395,20 @@ export function MySkills() {
                     {t("mySkills.noMatch")}
                   </div>
                 ) : (
-                  filteredSourceIndex.map((entry) => (
+                  filteredSourceIndex.map((entry) => {
+                    const primary =
+                      entry.label || t("mySkills.unknownSource");
+                    // Secondary line: host or full ref when label is short owner/repo
+                    const secondary =
+                      entry.url && entry.url !== primary
+                        ? entry.url
+                            .replace(/^https?:\/\//i, "")
+                            .replace(/\.git$/i, "")
+                        : entry.key.startsWith("git:") ||
+                            entry.key.startsWith("skillssh:")
+                          ? entry.key.replace(/^(git|skillssh):/, "")
+                          : null;
+                    return (
                     <button
                       key={entry.key}
                       type="button"
@@ -1415,14 +1428,22 @@ export function MySkills() {
                       <span className="shrink-0 text-muted">
                         {sourceIcon(entry.channel)}
                       </span>
-                      <span className="min-w-0 flex-1 truncate font-medium">
-                        {entry.label || t("mySkills.unknownSource")}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">
+                          {primary}
+                        </span>
+                        {secondary && secondary !== primary && (
+                          <span className="block truncate text-[10px] text-muted opacity-80">
+                            {secondary}
+                          </span>
+                        )}
                       </span>
                       <span className="shrink-0 text-[11px] text-muted">
                         {t("mySkills.sourceKeyFilter.count", { count: entry.count })}
                       </span>
                     </button>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
