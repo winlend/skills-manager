@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   Search,
   LayoutGrid,
@@ -207,6 +206,7 @@ export function MySkills() {
     speedLabel: string | null;
   } | null>(null);
   const downloadMeterRef = useRef<{ bytes: number; at: number } | null>(null);
+  const batchProgressRef = useRef<HTMLDivElement | null>(null);
   /**
    * Deduped work queue for update/check. Same skill id cannot enter twice while
    * pending or in-flight; after finish it may be enqueued again (re-update OK).
@@ -365,6 +365,21 @@ export function MySkills() {
     return displayNames;
   }, [skills]);
   skillDisplayNamesRef.current = skillDisplayNames;
+
+  useEffect(() => {
+    if (!(batchProgress || batchUpdating || scopedChecking)) return;
+    batchProgressRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [
+    batchProgress,
+    batchUpdating,
+    scopedChecking,
+    tagFilters,
+    sourceKeyFilter,
+    sourceFilters,
+    search,
+    filterMode,
+  ]);
+
 
 
   const sourceIndex = useMemo(() => buildSourceIndex(skills), [skills]);
@@ -1412,8 +1427,20 @@ export function MySkills() {
           <span className="app-badge">
             {skills.length}
           </span>
+          {(batchUpdating || scopedChecking || batchProgress) && (
+            <span className="inline-flex max-w-[min(420px,50vw)] items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-0.5 text-[12px] font-medium text-accent-light">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              <span className="truncate">
+                {batchProgress
+                  ? `${batchProgress.current}/${batchProgress.total} · ${batchProgress.name}`
+                  : t("mySkills.batchBackgroundHint")}
+              </span>
+              {downloadInfo?.speedLabel && (
+                <span className="shrink-0 opacity-90">{downloadInfo.speedLabel}/s</span>
+              )}
+            </span>
+          )}
         </h1>
-
       </div>
 
       <div className="app-toolbar">
@@ -1754,81 +1781,77 @@ export function MySkills() {
         )}
       </div>
 
-      {/* Fixed overlay: survives filter/tag switches and list scroll (Layout overflow-y-auto breaks sticky). */}
-      {(batchProgress || batchUpdating || scopedChecking) &&
-        createPortal(
-          <div
-            className="pointer-events-none fixed inset-x-0 z-[100] flex justify-center px-4"
-            style={{ top: "calc(28px + 8px)" }}
-          >
-            <div className="pointer-events-auto w-full max-w-[1200px] rounded-lg border border-accent/50 bg-surface px-3 py-2 shadow-xl">
-              <div className="mb-1 flex items-center justify-between gap-2 text-[12px] text-secondary">
-                <span className="min-w-0 truncate font-medium">
-                  {batchProgress
-                    ? batchProgress.mode === "check"
-                      ? t("mySkills.checkProgress", {
-                          current: batchProgress.current,
-                          total: batchProgress.total,
-                          name: batchProgress.name,
-                        })
-                      : t("mySkills.updateProgress", {
-                          current: batchProgress.current,
-                          total: batchProgress.total,
-                          name: batchProgress.name,
-                        })
-                    : t("mySkills.batchBackgroundHint")}
+      {/* In-flow progress under filters — does not cover toolbar; survives filter changes (queue still runs). */}
+      {(batchProgress || batchUpdating || scopedChecking) && (
+        <div
+          ref={batchProgressRef}
+          className="shrink-0 rounded-lg border border-accent/40 bg-accent-bg/30 px-3 py-2"
+        >
+          <div className="mb-1 flex items-center justify-between gap-2 text-[12px] text-secondary">
+            <span className="min-w-0 truncate font-medium">
+              {batchProgress
+                ? batchProgress.mode === "check"
+                  ? t("mySkills.checkProgress", {
+                      current: batchProgress.current,
+                      total: batchProgress.total,
+                      name: batchProgress.name,
+                    })
+                  : t("mySkills.updateProgress", {
+                      current: batchProgress.current,
+                      total: batchProgress.total,
+                      name: batchProgress.name,
+                    })
+                : t("mySkills.batchBackgroundHint")}
+            </span>
+            {batchProgress && (
+              <span className="shrink-0 text-muted">
+                {batchProgress.current}/{batchProgress.total}
+                {batchProgress.waiting > 0
+                  ? ` · ${t("mySkills.queueRemaining", { n: batchProgress.waiting })}`
+                  : ""}
+              </span>
+            )}
+          </div>
+          {batchProgress && (
+            <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
+              <div
+                className="h-full rounded-full bg-accent transition-all duration-300"
+                style={{
+                  width: `${Math.round(
+                    (batchProgress.current / Math.max(batchProgress.total, 1)) * 100
+                  )}%`,
+                }}
+              />
+            </div>
+          )}
+          {batchProgress &&
+            updatingSkillId &&
+            !filtered.some((s) => s.id === updatingSkillId) && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                {t("mySkills.batchRunningOutsideFilter", {
+                  name: batchProgress.name,
+                })}
+              </p>
+            )}
+          {downloadInfo &&
+            (batchProgress?.mode === "update" || batchUpdating) &&
+            (!updatingSkillId || downloadInfo.skillId === updatingSkillId) && (
+              <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
+                <span className="min-w-0 truncate font-mono">
+                  {downloadInfo.detail}
                 </span>
-                {batchProgress && (
-                  <span className="shrink-0 text-muted">
-                    {batchProgress.current}/{batchProgress.total}
-                    {batchProgress.waiting > 0
-                      ? ` · ${t("mySkills.queueRemaining", { n: batchProgress.waiting })}`
-                      : ""}
+                {downloadInfo.speedLabel && (
+                  <span className="shrink-0 font-semibold text-accent-light">
+                    {downloadInfo.speedLabel}/s
                   </span>
                 )}
               </div>
-              {batchProgress && (
-                <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
-                  <div
-                    className="h-full rounded-full bg-accent transition-all duration-300"
-                    style={{
-                      width: `${Math.round(
-                        (batchProgress.current / Math.max(batchProgress.total, 1)) * 100
-                      )}%`,
-                    }}
-                  />
-                </div>
-              )}
-              {batchProgress &&
-                updatingSkillId &&
-                !filtered.some((s) => s.id === updatingSkillId) && (
-                  <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                    {t("mySkills.batchRunningOutsideFilter", {
-                      name: batchProgress.name,
-                    })}
-                  </p>
-                )}
-              {downloadInfo &&
-                (batchProgress?.mode === "update" || batchUpdating) &&
-                (!updatingSkillId || downloadInfo.skillId === updatingSkillId) && (
-                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
-                    <span className="min-w-0 truncate font-mono">
-                      {downloadInfo.detail}
-                    </span>
-                    {downloadInfo.speedLabel && (
-                      <span className="shrink-0 font-semibold text-accent-light">
-                        {downloadInfo.speedLabel}/s
-                      </span>
-                    )}
-                  </div>
-                )}
-              <p className="mt-1 text-[10px] text-muted">
-                {t("mySkills.batchBackgroundHint")}
-              </p>
-            </div>
-          </div>,
-          document.body
-        )}
+            )}
+          <p className="mt-1 text-[10px] text-muted">
+            {t("mySkills.batchBackgroundHint")}
+          </p>
+        </div>
+      )}
 
       {isMultiSelect && (
         <MultiSelectToolbar
