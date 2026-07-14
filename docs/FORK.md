@@ -190,6 +190,7 @@ git pull origin main
 | 本说明 | `docs/FORK.md` |
 | 产品设计（Accepted） | `docs/plans/2026-07-14-library-source-filter-design.md` |
 | 实现计划（分 Task） | `docs/plans/2026-07-14-library-source-filter.md` |
+| 个人打包 / 覆盖安装 | `docs/PERSONAL-BUILD.md` + `scripts/sync-and-build.ps1` |
 | 官方 README | `README.md` / `README.zh-CN.md` |
 
 ### 实现时优先阅读的代码
