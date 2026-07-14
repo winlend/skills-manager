@@ -470,7 +470,12 @@
     "checkProgress": "正在检查 {{current}}/{{total}}：{{name}}",
     "batchProgressDone": "完成：更新 {{ok}}，未变 {{unchanged}}，失败 {{failed}}",
     "checkProgressDone": "已检查 {{ok}}/{{total}}（失败 {{failed}}）",
-    "updateFiltered": "更新筛选结果（{{count}}）"
+    "updateFiltered": "更新筛选结果（{{count}}）",
+    "batchAlreadyRunning": "已有批量任务在进行——未在队列中的项已追加",
+    "batchQueued": "已加入队列 {{added}} 个（{{skipped}} 个已在队列中，已跳过）",
+    "batchQueuedOnly": "已加入队列 {{added}} 个",
+    "batchNothingNew": "所选 Skill 均已在更新队列中",
+    "queueRemaining": "排队 {{n}}"
   },
   "install": {
     "title": "安装 Skills",

@@ -470,7 +470,12 @@
     "checkProgress": "Checking {{current}}/{{total}}: {{name}}",
     "batchProgressDone": "Done: {{ok}} updated, {{unchanged}} unchanged, {{failed}} failed",
     "checkProgressDone": "Checked {{ok}}/{{total}} ({{failed}} failed)",
-    "updateFiltered": "Update filtered ({{count}})"
+    "updateFiltered": "Update filtered ({{count}})",
+    "batchAlreadyRunning": "A batch is already running — new skills were queued if not already listed",
+    "batchQueued": "Queued {{added}} skill(s) ({{skipped}} already in queue)",
+    "batchQueuedOnly": "Queued {{added}} skill(s)",
+    "batchNothingNew": "All selected skills are already in the update queue",
+    "queueRemaining": "{{n}} waiting"
   },
   "install": {
     "title": "Install Skills",

@@ -175,7 +175,20 @@ export function MySkills() {
     current: number;
     total: number;
     name: string;
+    waiting: number;
   } | null>(null);
+  /**
+   * Deduped work queue for update/check. Same skill id cannot enter twice while
+   * pending or in-flight; after finish it may be enqueued again (re-update OK).
+   * Tag/filter changes never clear the queue — only the worker drains it.
+   */
+  const workQueueRef = useRef<Array<{ id: string; mode: "update" | "check" }>>([]);
+  const workPendingRef = useRef<Set<string>>(new Set()); // `${mode}:${id}`
+  const workRunningRef = useRef(false);
+  const workStatsRef = useRef({ ok: 0, unchanged: 0, failed: 0, processed: 0 });
+  const skillsRef = useRef(skills);
+  skillsRef.current = skills;
+  const skillDisplayNamesRef = useRef<Map<string, string>>(new Map());
   const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
   const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
   const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
@@ -278,6 +291,8 @@ export function MySkills() {
     }
     return displayNames;
   }, [skills]);
+  skillDisplayNamesRef.current = skillDisplayNames;
+
 
   const sourceIndex = useMemo(() => buildSourceIndex(skills), [skills]);
 
@@ -706,109 +721,203 @@ export function MySkills() {
   };
 
   const displayNameOf = (skill: ManagedSkill) =>
-    skillDisplayNames.get(skill.id) || skill.name;
+    skillDisplayNamesRef.current.get(skill.id) || skill.name;
+
+  const workKey = (mode: "update" | "check", id: string) => `${mode}:${id}`;
+
+  const publishQueueProgress = (
+    mode: "update" | "check",
+    name: string,
+  ) => {
+    const waiting = workQueueRef.current.filter((q) => q.mode === mode).length;
+    const processed = workStatsRef.current.processed;
+    // current item counts as processed+1; total = done + active + still waiting for this drain wave
+    const total = processed + 1 + waiting;
+    setBatchProgress({
+      mode,
+      current: processed + 1,
+      total: Math.max(total, 1),
+      name,
+      waiting,
+    });
+  };
 
   /**
-   * Sequential per-skill update with live progress.
-   * Used for selection / filtered / group scope.
+   * Drain deduped FIFO queue. Safe to call while running (no-op if already draining).
+   * New enqueueUpdates/enqueueChecks can append while this loop is mid-flight.
    */
-  const runSequentialUpdates = async (targetSkills: ManagedSkill[]) => {
-    const list = targetSkills.filter((s) => canRefresh(s));
-    if (list.length === 0) {
-      toast.info(t("mySkills.noUpdateableInScope"));
-      return;
-    }
+  const drainWorkQueue = async () => {
+    if (workRunningRef.current) return;
+    workRunningRef.current = true;
+    workStatsRef.current = { ok: 0, unchanged: 0, failed: 0, processed: 0 };
     setBatchUpdating(true);
-    let ok = 0;
-    let unchanged = 0;
-    let failed = 0;
+    setScopedChecking(true);
+    let lastMode: "update" | "check" | null = null;
     try {
-      for (let i = 0; i < list.length; i++) {
-        const skill = list[i];
-        setBatchProgress({
-          mode: "update",
-          current: i + 1,
-          total: list.length,
-          name: displayNameOf(skill),
-        });
-        setUpdatingSkillId(skill.id);
+      while (workQueueRef.current.length > 0) {
+        const job = workQueueRef.current.shift()!;
+        lastMode = job.mode;
+        const skill = skillsRef.current.find((s) => s.id === job.id);
+        const name = skill ? displayNameOf(skill) : job.id;
+        publishQueueProgress(job.mode, name);
+
+        if (job.mode === "update") {
+          setUpdatingSkillId(job.id);
+          setCheckingSkillId(null);
+        } else {
+          setCheckingSkillId(job.id);
+          setUpdatingSkillId(null);
+        }
+
         try {
-          if (skill.source_type === "local" || skill.source_type === "import") {
+          if (!skill) {
+            workStatsRef.current.failed += 1;
+          } else if (job.mode === "check") {
+            await api.checkSkillUpdate(skill.id, true);
+            workStatsRef.current.ok += 1;
+          } else if (
+            skill.source_type === "local" ||
+            skill.source_type === "import"
+          ) {
             await api.reimportLocalSkill(skill.id);
-            ok += 1;
+            workStatsRef.current.ok += 1;
           } else {
             const result = await api.updateSkill(skill.id);
-            if (result.content_changed) ok += 1;
-            else unchanged += 1;
+            if (result.content_changed) workStatsRef.current.ok += 1;
+            else workStatsRef.current.unchanged += 1;
           }
         } catch {
-          failed += 1;
+          workStatsRef.current.failed += 1;
+        } finally {
+          workPendingRef.current.delete(workKey(job.mode, job.id));
+          workStatsRef.current.processed += 1;
         }
       }
-      toast.success(
-        t("mySkills.batchProgressDone", { ok, unchanged, failed })
-      );
+
+      const { ok, unchanged, failed } = workStatsRef.current;
+      if (lastMode === "check") {
+        toast.success(
+          t("mySkills.checkProgressDone", {
+            ok,
+            total: workStatsRef.current.processed,
+            failed,
+          })
+        );
+      } else if (lastMode === "update") {
+        toast.success(
+          t("mySkills.batchProgressDone", { ok, unchanged, failed })
+        );
+      }
     } finally {
       setUpdatingSkillId(null);
+      setCheckingSkillId(null);
       setBatchProgress(null);
-      await refreshManagedSkills();
+      workRunningRef.current = false;
       setBatchUpdating(false);
+      setScopedChecking(false);
+      setGroupCheckingKey(null);
+      // If something was enqueued after we exited the while but before clearing running, re-drain
+      if (workQueueRef.current.length > 0) {
+        void drainWorkQueue();
+        return;
+      }
+      await refreshManagedSkills();
     }
   };
 
-  const runSequentialChecks = async (targetSkills: ManagedSkill[]) => {
-    const list = targetSkills.filter((s) => canRefresh(s));
-    if (list.length === 0) {
+  /**
+   * Enqueue skills for update. Dedupes by id while pending/in-flight.
+   * Allows repeat enqueue after a skill finishes (re-update OK).
+   * Does not lock tag/filter UI.
+   */
+  const enqueueUpdates = (targetSkills: ManagedSkill[]) => {
+    const candidates = targetSkills.filter(
+      (s) =>
+        s.source_type === "git" ||
+        s.source_type === "skillssh" ||
+        ((s.source_type === "local" || s.source_type === "import") &&
+          !!s.source_ref)
+    );
+    if (candidates.length === 0) {
       toast.info(t("mySkills.noUpdateableInScope"));
       return;
     }
-    setScopedChecking(true);
-    let ok = 0;
-    let failed = 0;
-    try {
-      for (let i = 0; i < list.length; i++) {
-        const skill = list[i];
-        setBatchProgress({
-          mode: "check",
-          current: i + 1,
-          total: list.length,
-          name: displayNameOf(skill),
-        });
-        setCheckingSkillId(skill.id);
-        try {
-          await api.checkSkillUpdate(skill.id, true);
-          ok += 1;
-        } catch {
-          failed += 1;
-        }
+    let added = 0;
+    let skipped = 0;
+    for (const skill of candidates) {
+      const key = workKey("update", skill.id);
+      if (workPendingRef.current.has(key)) {
+        skipped += 1;
+        continue;
       }
-      toast.success(
-        t("mySkills.checkProgressDone", { ok, total: list.length, failed })
-      );
-    } finally {
-      setCheckingSkillId(null);
-      setBatchProgress(null);
-      await refreshManagedSkills();
-      setScopedChecking(false);
+      workPendingRef.current.add(key);
+      workQueueRef.current.push({ id: skill.id, mode: "update" });
+      added += 1;
     }
+    if (added === 0) {
+      toast.info(t("mySkills.batchNothingNew"));
+      return;
+    }
+    if (skipped > 0) {
+      toast.info(t("mySkills.batchQueued", { added, skipped }));
+    } else if (workRunningRef.current) {
+      toast.info(t("mySkills.batchQueuedOnly", { added }));
+    }
+    void drainWorkQueue();
   };
 
-  const handleBatchRefresh = async () => {
+  const enqueueChecks = (targetSkills: ManagedSkill[]) => {
+    const candidates = targetSkills.filter(
+      (s) =>
+        s.source_type === "git" ||
+        s.source_type === "skillssh" ||
+        ((s.source_type === "local" || s.source_type === "import") &&
+          !!s.source_ref)
+    );
+    if (candidates.length === 0) {
+      toast.info(t("mySkills.noUpdateableInScope"));
+      return;
+    }
+    let added = 0;
+    let skipped = 0;
+    for (const skill of candidates) {
+      const key = workKey("check", skill.id);
+      if (workPendingRef.current.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      workPendingRef.current.add(key);
+      workQueueRef.current.push({ id: skill.id, mode: "check" });
+      added += 1;
+    }
+    if (added === 0) {
+      toast.info(t("mySkills.batchNothingNew"));
+      return;
+    }
+    if (skipped > 0) {
+      toast.info(t("mySkills.batchQueued", { added, skipped }));
+    } else if (workRunningRef.current) {
+      toast.info(t("mySkills.batchQueuedOnly", { added }));
+    }
+    void drainWorkQueue();
+  };
+
+  const handleBatchRefresh = () => {
     const selected = skills.filter((skill) => selectedIds.has(skill.id));
     const updatable = selected.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
     const targets =
       updatable.length > 0 ? updatable : selected.filter((s) => canRefresh(s));
-    await runSequentialUpdates(targets);
+    enqueueUpdates(targets);
   };
 
   /** Toolbar update count is scoped to current Library filters. */
-  const handleUpdateAvailableSkills = async () => {
+  const handleUpdateAvailableSkills = () => {
     const updatableSkills = filtered.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    await runSequentialUpdates(updatableSkills);
+    enqueueUpdates(updatableSkills);
   };
 
   const handleTogglePreset = async (skill: ManagedSkill) => {
@@ -851,27 +960,27 @@ export function MySkills() {
     }
   };
 
-  const handleScopedCheckUpdates = async (targetSkills: ManagedSkill[]) => {
-    await runSequentialChecks(targetSkills);
+  const handleScopedCheckUpdates = (targetSkills: ManagedSkill[]) => {
+    enqueueChecks(targetSkills);
   };
 
-  const handleGroupCheckUpdates = async (
+  const handleGroupCheckUpdates = (
     groupSkills: ManagedSkill[],
     key: string
   ) => {
     setGroupCheckingKey(key);
-    try {
-      await runSequentialChecks(groupSkills);
-    } finally {
-      setGroupCheckingKey(null);
-    }
+    enqueueChecks(groupSkills);
+    // clear group spinner when queue idle — next tick after enqueue
+    queueMicrotask(() => {
+      if (!workRunningRef.current) setGroupCheckingKey(null);
+    });
   };
 
-  const handleGroupUpdateAvailable = async (groupSkills: ManagedSkill[]) => {
+  const handleGroupUpdateAvailable = (groupSkills: ManagedSkill[]) => {
     const updatable = groupSkills.filter(
       (skill) => skill.update_status === "update_available" && canRefresh(skill)
     );
-    await runSequentialUpdates(updatable);
+    enqueueUpdates(updatable);
   };
 
   const handleBatchAddToPreset = async (presetId: string) => {
@@ -1584,6 +1693,9 @@ export function MySkills() {
             </span>
             <span className="shrink-0 text-muted">
               {batchProgress.current}/{batchProgress.total}
+              {batchProgress.waiting > 0
+                ? ` · ${t("mySkills.queueRemaining", { n: batchProgress.waiting })}`
+                : ""}
             </span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
