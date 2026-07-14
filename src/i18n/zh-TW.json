@@ -434,7 +434,9 @@
     "batchNothingNew": "所選 Skill 均已在更新佇列中",
     "queueRemaining": "排隊 {{n}}",
     "downloadSpeed": "{{speed}}/s",
-    "downloadDetail": "{{detail}}"
+    "downloadDetail": "{{detail}}",
+    "batchBackgroundHint": "切換標籤/篩選不會中斷佇列；目前項目可能不在篩選結果裡。",
+    "batchRunningOutsideFilter": "背景更新中（不在目前篩選）：{{name}}"
   },
   "install": {
     "title": "安裝 Skills",

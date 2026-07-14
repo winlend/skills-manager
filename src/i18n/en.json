@@ -477,7 +477,9 @@
     "batchNothingNew": "All selected skills are already in the update queue",
     "queueRemaining": "{{n}} waiting",
     "downloadSpeed": "{{speed}}/s",
-    "downloadDetail": "{{detail}}"
+    "downloadDetail": "{{detail}}",
+    "batchBackgroundHint": "Queue keeps running after you change filters. Current item may be outside the filtered list.",
+    "batchRunningOutsideFilter": "Updating in background (not in current filter): {{name}}"
   },
   "install": {
     "title": "Install Skills",

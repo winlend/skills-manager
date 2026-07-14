@@ -1753,41 +1753,56 @@ export function MySkills() {
         )}
       </div>
 
-      {batchProgress && (
-        <div className="mx-1 mb-1 rounded-lg border border-accent/30 bg-accent-bg/40 px-3 py-2">
+      {(batchProgress || batchUpdating || scopedChecking) && (
+        <div className="sticky top-0 z-30 mx-1 mb-1 rounded-lg border border-accent/40 bg-surface/95 px-3 py-2 shadow-md backdrop-blur-sm">
           <div className="mb-1 flex items-center justify-between gap-2 text-[12px] text-secondary">
             <span className="min-w-0 truncate font-medium">
-              {batchProgress.mode === "check"
-                ? t("mySkills.checkProgress", {
-                    current: batchProgress.current,
-                    total: batchProgress.total,
-                    name: batchProgress.name,
-                  })
-                : t("mySkills.updateProgress", {
-                    current: batchProgress.current,
-                    total: batchProgress.total,
-                    name: batchProgress.name,
-                  })}
+              {batchProgress
+                ? batchProgress.mode === "check"
+                  ? t("mySkills.checkProgress", {
+                      current: batchProgress.current,
+                      total: batchProgress.total,
+                      name: batchProgress.name,
+                    })
+                  : t("mySkills.updateProgress", {
+                      current: batchProgress.current,
+                      total: batchProgress.total,
+                      name: batchProgress.name,
+                    })
+                : t("mySkills.batchBackgroundHint")}
             </span>
-            <span className="shrink-0 text-muted">
-              {batchProgress.current}/{batchProgress.total}
-              {batchProgress.waiting > 0
-                ? ` · ${t("mySkills.queueRemaining", { n: batchProgress.waiting })}`
-                : ""}
-            </span>
+            {batchProgress && (
+              <span className="shrink-0 text-muted">
+                {batchProgress.current}/{batchProgress.total}
+                {batchProgress.waiting > 0
+                  ? ` · ${t("mySkills.queueRemaining", { n: batchProgress.waiting })}`
+                  : ""}
+              </span>
+            )}
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
-            <div
-              className="h-full rounded-full bg-accent transition-all duration-300"
-              style={{
-                width: `${Math.round(
-                  (batchProgress.current / Math.max(batchProgress.total, 1)) * 100
-                )}%`,
-              }}
-            />
-          </div>
+          {batchProgress && (
+            <div className="h-1.5 overflow-hidden rounded-full bg-surface-hover">
+              <div
+                className="h-full rounded-full bg-accent transition-all duration-300"
+                style={{
+                  width: `${Math.round(
+                    (batchProgress.current / Math.max(batchProgress.total, 1)) * 100
+                  )}%`,
+                }}
+              />
+            </div>
+          )}
+          {batchProgress &&
+            updatingSkillId &&
+            !filtered.some((s) => s.id === updatingSkillId) && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                {t("mySkills.batchRunningOutsideFilter", {
+                  name: batchProgress.name,
+                })}
+              </p>
+            )}
           {downloadInfo &&
-            batchProgress.mode === "update" &&
+            (batchProgress?.mode === "update" || batchUpdating) &&
             (!updatingSkillId || downloadInfo.skillId === updatingSkillId) && (
               <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
                 <span className="min-w-0 truncate font-mono">
@@ -1800,6 +1815,9 @@ export function MySkills() {
                 )}
               </div>
             )}
+          <p className="mt-1 text-[10px] text-muted">
+            {t("mySkills.batchBackgroundHint")}
+          </p>
         </div>
       )}
 
