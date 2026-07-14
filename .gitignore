@@ -31,9 +31,14 @@ dist-ssr
 *.sln
 *.sw?
 
+# Local agent/session scratch (do not commit)
 .claude
-docs
-reference
-CLAUDE.md
 .loop-log
+reference
+docs/_local/
+
+# NOTE (winlend fork): project docs + CLAUDE.md ARE tracked so future
+# sessions and clones get fork purpose / upstream-sync context.
+# See docs/FORK.md. Upstream historically ignored `docs`/`CLAUDE.md`;
+# this fork intentionally tracks them.
 
