@@ -475,7 +475,9 @@
     "batchQueued": "已加入队列 {{added}} 个（{{skipped}} 个已在队列中，已跳过）",
     "batchQueuedOnly": "已加入队列 {{added}} 个",
     "batchNothingNew": "所选 Skill 均已在更新队列中",
-    "queueRemaining": "排队 {{n}}"
+    "queueRemaining": "排队 {{n}}",
+    "downloadSpeed": "{{speed}}/s",
+    "downloadDetail": "{{detail}}"
   },
   "install": {
     "title": "安装 Skills",

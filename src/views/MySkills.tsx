@@ -27,6 +27,7 @@ import {
   FolderTree,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -124,6 +125,28 @@ function centralDirName(skill: ManagedSkill) {
   return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
 }
 
+/** Parse received-byte counts from git/git2 progress lines. */
+function parseReceivedBytes(detail: string): number | null {
+  const kb = detail.match(/\(([\d.]+)\s*KB\)/i);
+  if (kb) return Math.round(parseFloat(kb[1]) * 1024);
+  const mib = detail.match(/\(([\d.]+)\s*MiB\)/i);
+  if (mib) return Math.round(parseFloat(mib[1]) * 1024 * 1024);
+  const mibPipe = detail.match(/([\d.]+)\s*MiB\s*\|/i);
+  if (mibPipe) return Math.round(parseFloat(mibPipe[1]) * 1024 * 1024);
+  const kibPipe = detail.match(/([\d.]+)\s*KiB\s*\|/i);
+  if (kibPipe) return Math.round(parseFloat(kibPipe[1]) * 1024);
+  const raw = detail.match(/(\d+)\s*bytes/i);
+  if (raw) return parseInt(raw[1], 10);
+  return null;
+}
+
+function formatByteRate(bps: number): string {
+  if (!Number.isFinite(bps) || bps < 0) return "—";
+  if (bps >= 1024 * 1024) return `${(bps / (1024 * 1024)).toFixed(1)} MB`;
+  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB`;
+  return `${Math.round(bps)} B`;
+}
+
 export function MySkills() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -177,6 +200,12 @@ export function MySkills() {
     name: string;
     waiting: number;
   } | null>(null);
+  const [downloadInfo, setDownloadInfo] = useState<{
+    skillId: string;
+    detail: string;
+    speedLabel: string | null;
+  } | null>(null);
+  const downloadMeterRef = useRef<{ bytes: number; at: number } | null>(null);
   /**
    * Deduped work queue for update/check. Same skill id cannot enter twice while
    * pending or in-flight; after finish it may be enqueued again (re-update OK).
@@ -213,6 +242,49 @@ export function MySkills() {
 
   // Skills with an unresolved sync conflict get a "needs attention" badge
   // that jumps to the Backup page (merge-engine design §4 UI).
+
+  // Git fetch/clone progress from update_skill (bytes → estimated rate)
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void listen<{ skill_id: string; phase: string; detail?: string }>(
+      "skill-update-progress",
+      (event) => {
+        if (cancelled) return;
+        const { skill_id, detail } = event.payload;
+        if (!detail) return;
+        const bytes = parseReceivedBytes(detail);
+        let speedLabel: string | null = null;
+        const now = performance.now();
+        if (bytes != null) {
+          const prev = downloadMeterRef.current;
+          if (prev && now > prev.at && bytes >= prev.bytes) {
+            const dt = (now - prev.at) / 1000;
+            if (dt >= 0.2) {
+              speedLabel = formatByteRate((bytes - prev.bytes) / dt);
+            }
+          }
+          if (prev && bytes + 1024 < prev.bytes) {
+            downloadMeterRef.current = { bytes, at: now };
+          } else if (!prev || now - prev.at >= 200) {
+            downloadMeterRef.current = { bytes, at: now };
+          }
+        }
+        setDownloadInfo((prevInfo) => ({
+          skillId: skill_id,
+          detail,
+          speedLabel: speedLabel ?? prevInfo?.speedLabel ?? null,
+        }));
+      }
+    ).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   const [conflictIds, setConflictIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     api.gitBackupPendingConflicts()
@@ -764,9 +836,13 @@ export function MySkills() {
         if (job.mode === "update") {
           setUpdatingSkillId(job.id);
           setCheckingSkillId(null);
+          setDownloadInfo(null);
+          downloadMeterRef.current = null;
         } else {
           setCheckingSkillId(job.id);
           setUpdatingSkillId(null);
+          setDownloadInfo(null);
+          downloadMeterRef.current = null;
         }
 
         try {
@@ -812,6 +888,8 @@ export function MySkills() {
       setUpdatingSkillId(null);
       setCheckingSkillId(null);
       setBatchProgress(null);
+      setDownloadInfo(null);
+      downloadMeterRef.current = null;
       workRunningRef.current = false;
       setBatchUpdating(false);
       setScopedChecking(false);
@@ -1708,6 +1786,20 @@ export function MySkills() {
               }}
             />
           </div>
+          {downloadInfo &&
+            batchProgress.mode === "update" &&
+            (!updatingSkillId || downloadInfo.skillId === updatingSkillId) && (
+              <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted">
+                <span className="min-w-0 truncate font-mono">
+                  {downloadInfo.detail}
+                </span>
+                {downloadInfo.speedLabel && (
+                  <span className="shrink-0 font-semibold text-accent-light">
+                    {downloadInfo.speedLabel}/s
+                  </span>
+                )}
+              </div>
+            )}
         </div>
       )}
 

@@ -475,7 +475,9 @@
     "batchQueued": "Queued {{added}} skill(s) ({{skipped}} already in queue)",
     "batchQueuedOnly": "Queued {{added}} skill(s)",
     "batchNothingNew": "All selected skills are already in the update queue",
-    "queueRemaining": "{{n}} waiting"
+    "queueRemaining": "{{n}} waiting",
+    "downloadSpeed": "{{speed}}/s",
+    "downloadDetail": "{{detail}}"
   },
   "install": {
     "title": "Install Skills",
