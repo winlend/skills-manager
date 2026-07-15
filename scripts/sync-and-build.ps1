@@ -416,20 +416,48 @@ if (-not $SkipBuild) {
 
     Write-Step "Tauri build (no updater signature artifacts)"
     Write-Info "This can take several minutes on first run..."
+    # Official tauri.conf.json has plugins.updater.pubkey + createUpdaterArtifacts=true.
+    # Personal builds must disable signing requirements or tauri exits with:
+    #   "A public key has been found, but no private key..."
     $mergeConf = Join-Path $RepoRoot "src-tauri\tauri.personal-build.conf.json"
-    @'
-{
-  "bundle": {
-    "createUpdaterArtifacts": false
-  }
-}
-'@ | Set-Content -Path $mergeConf -Encoding utf8
+    $personalCfg = @{
+      bundle  = @{
+        createUpdaterArtifacts = $false
+        # MSI/NSIS/etc. not needed for side-by-side exe copy
+        targets                = @("nsis")
+      }
+      plugins = @{
+        updater = @{
+          # Empty pubkey so bundler does not demand TAURI_SIGNING_PRIVATE_KEY
+          pubkey    = ""
+          endpoints = @()
+        }
+      }
+    } | ConvertTo-Json -Depth 6
+    # UTF-8 *without* BOM — BOM can break tauri --config JSON parse on some versions
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($mergeConf, $personalCfg, $utf8NoBom)
+    Write-Info "Merge config: $mergeConf (createUpdaterArtifacts=false, pubkey cleared)"
 
-    npm run tauri -- build --config "src-tauri/tauri.personal-build.conf.json"
-    if ($LASTEXITCODE -ne 0) {
-      Write-Warn "Build with personal config failed; retry plain tauri:build"
-      npm run tauri:build
-      if ($LASTEXITCODE -ne 0) { throw "tauri build failed (exit $LASTEXITCODE)" }
+    # Do NOT fall back to plain `tauri:build` — that re-enables official signing.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+      npm run tauri -- build --config "src-tauri/tauri.personal-build.conf.json"
+      $buildCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $prevEap
+    }
+    if ($buildCode -ne 0) {
+      throw @"
+tauri personal build failed (exit $buildCode).
+
+If the log still mentions TAURI_SIGNING_PRIVATE_KEY:
+  - Confirm $mergeConf has createUpdaterArtifacts=false and empty pubkey
+  - Re-run: npm run tauri -- build --config src-tauri/tauri.personal-build.conf.json
+
+Do not use ``npm run tauri:build`` for this fork (needs official private key).
+"@
     }
 
     if (-not (Test-Path $builtExe)) {

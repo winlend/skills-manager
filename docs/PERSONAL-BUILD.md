@@ -86,12 +86,16 @@ git merge --abort
 
 ## 打包与部署
 
-1. `tauri build`（`createUpdaterArtifacts: false`，个人用一般无需签名密钥）  
+1. `tauri build` 使用 `src-tauri/tauri.personal-build.conf.json` 合并配置：  
+   - `createUpdaterArtifacts: false`  
+   - 清空 `plugins.updater.pubkey`（避免索要 `TAURI_SIGNING_PRIVATE_KEY`）  
 2. 产物：`src-tauri\target\release\skills-manager.exe`  
 3. **默认部署**：复制为  
    `D:\Program Files\skills-manager\skills-manager-winlend.exe`  
    （仅备份同名 **fork** 旧文件，不动官方 exe；`-NoDeploy` 可跳过）  
 4. `-CreateShortcut`：桌面「Skills Manager (winlend)」  
+
+**不要**对个人 fork 跑 `npm run tauri:build`（会走官方 conf，需要签名私钥）。
 
 启动 fork：
 
@@ -115,5 +119,6 @@ git merge --abort
 |------|------|
 | 冲突后工作区乱七八糟 | `git merge --abort` 回到合并前 |
 | Access denied 写 Program Files | 管理员运行；或 `-InstallDir` 改到你有权限的目录；或 `-NoDeploy` 只打包 |
+| `TAURI_SIGNING_PRIVATE_KEY` | 脚本应已禁用签名；勿回退 `tauri:build`。确认 `tauri.personal-build.conf.json` 存在且无 BOM |
 | 脏工作区拒绝运行 | **仅当**「上游也有」的已跟踪文件有**真实 diff** 时拦截。未跟踪、fork 独有、以及 `status` 脏但 `diff` 为空（Windows CRLF 假脏，如 `Cargo.toml`）均可忽略 |
 | 想回官方 | 直接运行官方 `skills-manager.exe`，不必删 fork 副本 |
