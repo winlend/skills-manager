@@ -196,11 +196,73 @@ if (Test-Path (Join-Path $RepoRoot ".git\rebase-merge")) {
   throw "Unfinished rebase detected. Finish or: git rebase --abort"
 }
 
-$status = git status --porcelain
-if ($status) {
-  Write-Warn "Working tree is dirty:"
-  git status -sb
-  throw "Commit or stash local changes before sync/build so merges stay safe."
+# Dirty check: only block modifications to files that also exist on
+# upstream/main (shared with official). Untracked / fork-only files are ignored
+# so local caches (e.g. .playwright-mcp) and fork-only edits don't stop builds.
+function Get-DirtyPathsBlockingSync {
+  # porcelain: "XY path" or "XY orig -> path" for renames
+  $lines = @(git status --porcelain --untracked-files=no 2>$null)
+  if (-not $lines) { return @() }
+
+  $paths = New-Object System.Collections.Generic.List[string]
+  foreach ($line in $lines) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    # Skip untracked/ignored (shouldn't appear with -uno, but be safe)
+    $xy = $line.Substring(0, [Math]::Min(2, $line.Length))
+    if ($xy -match '^\?\?' -or $xy -match '^!!') { continue }
+
+    $rest = $line.Substring(3).Trim()
+    if ($rest -match ' -> ') {
+      $rest = ($rest -split ' -> ', 2)[1]
+    }
+    # Strip optional quotes
+    $rest = $rest.Trim('"')
+    if ($rest) { [void]$paths.Add($rest) }
+  }
+  $paths = @($paths | Select-Object -Unique)
+  if ($paths.Count -eq 0) { return @() }
+
+  # Prefer filtering to files present on upstream/main (shared surface).
+  $upstreamRef = $null
+  git show-ref --verify --quiet refs/remotes/upstream/main 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    $upstreamRef = "upstream/main"
+  } else {
+    git show-ref --verify --quiet refs/remotes/origin/main 2>$null
+    if ($LASTEXITCODE -eq 0) { $upstreamRef = "origin/main" }
+  }
+
+  if (-not $upstreamRef) {
+    # No remote main to compare: block any tracked dirty files.
+    return $paths
+  }
+
+  $blocking = New-Object System.Collections.Generic.List[string]
+  foreach ($p in $paths) {
+    # path exists as blob/tree entry on upstream/main?
+    git cat-file -e "${upstreamRef}:$p" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      [void]$blocking.Add($p)
+    }
+  }
+  return @($blocking)
+}
+
+$blockingDirty = @(Get-DirtyPathsBlockingSync)
+if ($blockingDirty.Count -gt 0) {
+  Write-Warn "Tracked files that also exist on upstream/main are dirty:"
+  foreach ($p in $blockingDirty) { Write-Host "    - $p" -ForegroundColor Yellow }
+  Write-Info "Untracked / fork-only paths are ignored for this check."
+  throw "Commit or stash shared-file changes before sync/build so merges stay safe."
+} else {
+  $anyTracked = @(git status --porcelain --untracked-files=no 2>$null)
+  if ($anyTracked) {
+    Write-Info "Local tracked changes are fork-only (not on upstream/main) — OK to continue."
+  }
+  $untracked = @(git status --porcelain --untracked-files=normal 2>$null | Where-Object { $_ -match '^\?\?' })
+  if ($untracked) {
+    Write-Info ("Ignoring {0} untracked path(s) (e.g. local caches)." -f $untracked.Count)
+  }
 }
 
 $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()

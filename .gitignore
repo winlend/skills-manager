@@ -45,3 +45,7 @@ src-tauri/tauri.personal-build.conf.json
 # See docs/FORK.md. Upstream historically ignored `docs`/`CLAUDE.md`;
 # this fork intentionally tracks them.
 
+
+# Playwright MCP local snapshots
+.playwright-mcp/
+
