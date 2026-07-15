@@ -142,6 +142,30 @@ function Invoke-GitMerge {
   Write-Ok "merged $FromRef → $IntoBranch"
 }
 
+# Run a native exe without turning stderr progress into terminating errors.
+# PowerShell 5.1 + $ErrorActionPreference=Stop treats git/npm stderr as errors
+# when you pipe 2>&1 — even on exit code 0 ("To https://github.com/...").
+function Invoke-NativeBestEffort {
+  param(
+    [string]$Label,
+    [scriptblock]$Command
+  )
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $Command
+    $code = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+  if ($code -ne 0) {
+    Write-Warn "$Label failed (exit $code) — continuing"
+    return $false
+  }
+  Write-Ok $Label
+  return $true
+}
+
 # --- start ---
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
@@ -332,8 +356,14 @@ if (-not $SkipSync) {
 
       if ($remotes -contains "origin") {
         Write-Step "Push to origin (best-effort)"
-        git push origin main 2>&1 | Out-Host
-        if ($Branch -ne "main") { git push origin $Branch 2>&1 | Out-Host }
+        [void](Invoke-NativeBestEffort "git push origin main" {
+          git push origin main
+        })
+        if ($Branch -ne "main") {
+          [void](Invoke-NativeBestEffort "git push origin $Branch" {
+            git push origin $Branch
+          })
+        }
       }
     }
   }
