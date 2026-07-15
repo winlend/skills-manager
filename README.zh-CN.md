@@ -19,6 +19,10 @@
 </p>
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/23290?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-23290" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/23290" alt="xingkongliang%2Fskills-manager | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p align="center">
   <img src="assets/demo/library.png" width="800" alt="Skills Manager 技能库" />
 </p>
 
