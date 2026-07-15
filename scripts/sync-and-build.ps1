@@ -223,6 +223,8 @@ if (Test-Path (Join-Path $RepoRoot ".git\rebase-merge")) {
 # Dirty check: only block modifications to files that also exist on
 # upstream/main (shared with official). Untracked / fork-only files are ignored
 # so local caches (e.g. .playwright-mcp) and fork-only edits don't stop builds.
+# Also ignore "phantom dirty" (git status says modified, but git diff is empty) —
+# common on Windows with core.autocrlf=true (e.g. Cargo.toml).
 function Get-DirtyPathsBlockingSync {
   # porcelain: "XY path" or "XY orig -> path" for renames
   $lines = @(git status --porcelain --untracked-files=no 2>$null)
@@ -257,19 +259,47 @@ function Get-DirtyPathsBlockingSync {
   }
 
   if (-not $upstreamRef) {
-    # No remote main to compare: block any tracked dirty files.
-    return $paths
+    # No remote main to compare: still drop phantom-dirty paths.
+    return @(Get-PathsWithRealDiff -Paths $paths)
   }
 
-  $blocking = New-Object System.Collections.Generic.List[string]
+  $shared = New-Object System.Collections.Generic.List[string]
   foreach ($p in $paths) {
     # path exists as blob/tree entry on upstream/main?
     git cat-file -e "${upstreamRef}:$p" 2>$null
     if ($LASTEXITCODE -eq 0) {
-      [void]$blocking.Add($p)
+      [void]$shared.Add($p)
     }
   }
-  return @($blocking)
+  return @(Get-PathsWithRealDiff -Paths @($shared))
+}
+
+function Get-PathsWithRealDiff {
+  param([string[]]$Paths)
+  if (-not $Paths -or $Paths.Count -eq 0) { return @() }
+
+  $real = New-Object System.Collections.Generic.List[string]
+  $phantom = New-Object System.Collections.Generic.List[string]
+  foreach ($p in $Paths) {
+    # Empty output = no content change vs HEAD (or unstaged empty after smudge).
+    $diffOut = git diff --unified=0 --ignore-cr-at-eol -- $p 2>$null
+    $stagedOut = git diff --cached --unified=0 --ignore-cr-at-eol -- $p 2>$null
+    $hasDiff = ($diffOut -and (@($diffOut).Count -gt 0)) -or ($stagedOut -and (@($stagedOut).Count -gt 0))
+    if ($hasDiff) {
+      [void]$real.Add($p)
+    } else {
+      [void]$phantom.Add($p)
+    }
+  }
+  if ($phantom.Count -gt 0) {
+    Write-Info ("Ignoring {0} phantom-dirty path(s) (status dirty, empty diff; often CRLF):" -f $phantom.Count)
+    foreach ($p in $phantom) { Write-Info "  - $p" }
+    # Best-effort: refresh index so later git status is cleaner (non-fatal).
+    foreach ($p in $phantom) {
+      git update-index --refresh -- $p 2>$null | Out-Null
+    }
+  }
+  return @($real)
 }
 
 $blockingDirty = @(Get-DirtyPathsBlockingSync)

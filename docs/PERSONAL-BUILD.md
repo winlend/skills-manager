@@ -115,5 +115,5 @@ git merge --abort
 |------|------|
 | 冲突后工作区乱七八糟 | `git merge --abort` 回到合并前 |
 | Access denied 写 Program Files | 管理员运行；或 `-InstallDir` 改到你有权限的目录；或 `-NoDeploy` 只打包 |
-| 脏工作区拒绝运行 | **仅当**「上游也有」的已跟踪文件被改动时拦截。未跟踪（如 `.playwright-mcp/`）与 **fork 独有**文件可忽略。共享文件改动请 commit / stash |
+| 脏工作区拒绝运行 | **仅当**「上游也有」的已跟踪文件有**真实 diff** 时拦截。未跟踪、fork 独有、以及 `status` 脏但 `diff` 为空（Windows CRLF 假脏，如 `Cargo.toml`）均可忽略 |
 | 想回官方 | 直接运行官方 `skills-manager.exe`，不必删 fork 副本 |
