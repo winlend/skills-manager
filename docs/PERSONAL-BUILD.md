@@ -86,9 +86,10 @@ git merge --abort
 
 ## 打包与部署
 
-1. `tauri build` 使用 `src-tauri/tauri.personal-build.conf.json` 合并配置：  
+1. `npm run tauri:build:personal`（脚本会先写 `src-tauri/tauri.personal-build.conf.json`）：  
    - `createUpdaterArtifacts: false`  
    - 清空 `plugins.updater.pubkey`（避免索要 `TAURI_SIGNING_PRIVATE_KEY`）  
+   - **勿**用 `npm run tauri -- build --config ...`：npm 会吞掉 `--config`，路径误传给 cargo  
 2. 产物：`src-tauri\target\release\skills-manager.exe`  
 3. **默认部署**：复制为  
    `D:\Program Files\skills-manager\skills-manager-winlend.exe`  
@@ -119,6 +120,7 @@ git merge --abort
 |------|------|
 | 冲突后工作区乱七八糟 | `git merge --abort` 回到合并前 |
 | Access denied 写 Program Files | 管理员运行；或 `-InstallDir` 改到你有权限的目录；或 `-NoDeploy` 只打包 |
-| `TAURI_SIGNING_PRIVATE_KEY` | 脚本应已禁用签名；勿回退 `tauri:build`。确认 `tauri.personal-build.conf.json` 存在且无 BOM |
+| `TAURI_SIGNING_PRIVATE_KEY` | 用 `npm run tauri:build:personal`；勿用官方 `tauri:build`；确认 personal conf 存在且无 BOM |
+| `unexpected argument '...personal-build.conf.json'` | 旧写法把 `--config` 传给了 npm。请拉最新脚本，用 `tauri:build:personal` |
 | 脏工作区拒绝运行 | **仅当**「上游也有」的已跟踪文件有**真实 diff** 时拦截。未跟踪、fork 独有、以及 `status` 脏但 `diff` 为空（Windows CRLF 假脏，如 `Cargo.toml`）均可忽略 |
 | 想回官方 | 直接运行官方 `skills-manager.exe`，不必删 fork 副本 |

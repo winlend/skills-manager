@@ -439,11 +439,15 @@ if (-not $SkipBuild) {
     [System.IO.File]::WriteAllText($mergeConf, $personalCfg, $utf8NoBom)
     Write-Info "Merge config: $mergeConf (createUpdaterArtifacts=false, pubkey cleared)"
 
+    # IMPORTANT: do not pass `--config` through `npm run tauri -- ...`.
+    # npm treats `--config` as its own option and the path leaks into cargo:
+    #   unexpected argument 'src-tauri/tauri.personal-build.conf.json'
+    # Use the dedicated npm script (config baked into package.json) instead.
     # Do NOT fall back to plain `tauri:build` — that re-enables official signing.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-      npm run tauri -- build --config "src-tauri/tauri.personal-build.conf.json"
+      npm run tauri:build:personal
       $buildCode = $LASTEXITCODE
     } finally {
       $ErrorActionPreference = $prevEap
@@ -454,7 +458,7 @@ tauri personal build failed (exit $buildCode).
 
 If the log still mentions TAURI_SIGNING_PRIVATE_KEY:
   - Confirm $mergeConf has createUpdaterArtifacts=false and empty pubkey
-  - Re-run: npm run tauri -- build --config src-tauri/tauri.personal-build.conf.json
+  - Re-run: npm run tauri:build:personal
 
 Do not use ``npm run tauri:build`` for this fork (needs official private key).
 "@
